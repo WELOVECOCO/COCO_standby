@@ -2,8 +2,20 @@ import tkinter as tk
 import numpy as np
 from core.utils import load_model
 
-model = load_model('mnist_coco.pkl')  
+model = load_model('model.pkl')  
+"""
 
+
+
+IN ORDER TO RUN THIS FILE FIRST TRAIN THE MODEL ON THE MNIST THEN AFTER TRAINING THE MODEL SAVE THE MODEL USING THE FUNCTION save_model() IN THE FILE core/utils.py
+
+
+
+
+
+
+
+"""
 # Define a set of colors for each digit's prediction bar
 DIGIT_COLORS = {
     0: "#e57373",  # red

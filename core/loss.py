@@ -1,5 +1,5 @@
 import numpy as np
-
+from core.tensor import Tensor
 # Global constant for numerical stability in logarithms.
 EPSILON = 1e-12
 
@@ -36,7 +36,7 @@ def binary_cross_entropy(y_true, y_pred):
     y_pred_clipped = np.clip(y_pred, EPSILON, 1 - EPSILON)
     loss = -np.mean(y_true * np.log(y_pred_clipped) + (1 - y_true) * np.log(1 - y_pred_clipped), axis=0)
     grad = (y_pred_clipped - y_true) / B
-    return loss, grad
+    return Tensor(loss), Tensor(grad) 
 
 
 def sparse_categorical_cross_entropy(y_true, y_pred, axis=1):
@@ -84,7 +84,7 @@ def sparse_categorical_cross_entropy(y_true, y_pred, axis=1):
     B = y_pred.shape[0]
     loss = -np.mean(np.sum(y_dense * np.log(y_pred + EPSILON), axis=axis), axis=0)
     grad = (y_pred - y_dense) / B
-    return loss, grad
+    return Tensor(loss), Tensor(grad) 
 
 
 def mean_squared_error(y_true, y_pred):

@@ -10,7 +10,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 from core.Datasets import Dataset
 import inspect
 import re
-
+from core.tensor import Tensor
 class Module:
     def __init__(self):
         pass
@@ -108,7 +108,7 @@ class Linear(Layer):
             raise ValueError(f"Unknown initialization method: {initialize_type}")
 
         b = np.zeros((1, output_dim))  # Bias is always initialized to zeros
-        return w, b
+        return Tensor(w, requires_grad=True), Tensor(b, requires_grad=True)  # Return Tensor objects for weights and biases
 
     def __call__(self, input,**kwargs):
         """
@@ -128,12 +128,12 @@ class Linear(Layer):
         elif self.input.ndim != 2:  # If input is not 2D or 4D, raise an error
             raise ValueError(f"Linear layer received input of unsupported shape {self.input.shape}")
         
-        self.out = (self.input @ self.weights) + self.bias  # Affine transformation
-            
-        
+        out = (self.input @ self.weights) + self.bias  # Affine transformation
+        self.out = Tensor(out, requires_grad=True)    
+        self.out._grad_fn = self.backward  # Set the backward function for autograd
         return self.out
 
-    def backward(self, error_wrt_output, **kwargs):
+    def backward(self, grad):
         """
         Performs the backward pass, computing gradients of the loss with respect to input, weights, and bias.
         
@@ -144,28 +144,20 @@ class Linear(Layer):
         Returns:
             np.ndarray: Gradient of loss with respect to layer input.
         """
-        l1 = kwargs.get('l1', None)
-        l2 = kwargs.get('l2', None)
+        
         
         # Gradient of loss w.r.t. weights
-        self.grad_w = self.input.T @ error_wrt_output
-
-        if l1 is not None:
-            self.grad_w += (l1 * np.sign(self.weights))
-        if l2 is not None:
-            self.grad_w += (l2 * self.weights)
+        self.weights.grad = self.input.T @ grad
 
         # Gradient of loss w.r.t. bias
-        self.grad_b = np.sum(error_wrt_output, axis=0, keepdims=True)
+        self.bias.grad = np.sum(grad, axis=0, keepdims=True)
         
         # Gradient of loss w.r.t. input
-        self.loss_wrt_input = error_wrt_output @ self.weights.T
+        self.input.grad = grad @ self.weights.T
         
         assert self.grad_w.shape == self.weights.shape
         assert self.grad_b.shape == self.bias.shape
         assert self.loss_wrt_input.shape == self.input.shape
-        
-        return self.loss_wrt_input
 
 class Conv2d(Layer):
     def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0, initialize_type="xavier"):

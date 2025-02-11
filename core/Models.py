@@ -59,7 +59,7 @@ class Model:
         """
         Perform the backward pass through all layers.
         """
-        for layer_name, layer in reversed(self.layers.items()):
+        for layer_name, layer in reversed(list(self.layers.items())):
             
             error_grad = layer.backward(error_grad, l1=l1, l2=l2)
             if isinstance(layer, Layer):

@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
+from core.tensor import Tensor
 
 @staticmethod
 def get_activation(activation_name):
@@ -64,7 +64,7 @@ class Activation:
             test (bool): Flag to indicate test mode (dropout is not applied in test mode).
         """
         if self.dropout is not None and not self.test:
-            self.mask = (np.random.rand(*self.output.shape) < (1 - self.dropout)).astype(float)
+            self.mask = Tensor((np.random.rand(*self.output.shape) < (1 - self.dropout)).astype(float), requires_grad=False)
             self.output *= self.mask
             self.output /= (1 - self.dropout)
 
@@ -76,7 +76,7 @@ class tanh(Activation):
     def __init__(self, dropout=None):
         super().__init__(dropout)
 
-    def __call__(self, x, **args):
+    def __call__(self, x):
         """
         Compute the __call__ pass using the tanh function.
 
@@ -87,13 +87,17 @@ class tanh(Activation):
         Returns:
             ndarray: Transformed tensor using tanh.
         """
-        self.output = np.tanh(x)
+        output = np.tanh(x)
+        self.output = Tensor(output, requires_grad=True)
         
         self.apply_dropout()
         
+        self.output._grad_fn = self.backward
+        self.output.parents = [x]
+        
         return self.output
 
-    def backward(self, grad, **args):
+    def backward(self, grad):
         """
         Compute the backward pass (derivative of tanh).
 
@@ -103,7 +107,7 @@ class tanh(Activation):
         Returns:
             ndarray: Gradient after applying the derivative of tanh.
         """
-        return grad * (1 - self.output ** 2)
+        self.parents[0].grad = grad * (1 - self.output ** 2)
 
 
 class sigmoid(Activation):
