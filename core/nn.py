@@ -1,16 +1,9 @@
 
 import numpy as np
-import matplotlib.pyplot as plt
-from core.wrapper import timing_decorator
-import core.Function as fn
-import core.optim as opt
-import core.loss as ls
 from core.operations import FastConvolver
 from numpy.lib.stride_tricks import sliding_window_view
-from core.Datasets import Dataset
-import inspect
-import re
 from core.tensor import Tensor
+from core.Function import *
 class Module:
     def __init__(self):
         pass
@@ -21,24 +14,16 @@ class Layer(Module):
         
         """
         self.initialize_type = None
-        self.loss_wrt_output = None
-        self.loss_wrt_input = None
         self.weights=None
         self.bias=None
-        self.grad_w = None
-        self.grad_b = None
-        self.momentum_w = None
-        self.momentum_b = None
-        self.Accumelated_Gsquare_w = None
-        self.Accumelated_Gsquare_b = None
-        self.t = 1 #used in ADAM and NADAM
-        self.eps = 1e-7
-        
-        # self.dropout = None
-    def forward():
+        self.input=None
+
+    def parameters(self):
+        return [self.weights,self.bias]
+    def __call__(self, input,**kwargs):
         pass
 
-    def backward():
+    def backward(self,grad):
         pass
 
     def initialize_weights(self, shape,initialize_type):
@@ -53,7 +38,7 @@ class Linear(Layer):
     and optional dropout for regularization.
     """
     
-    def __init__(self, shape: tuple, initialize_type="random"):
+    def __init__(self,input_dim, output_dim, initialize_type="random",activation="none",dropout=None):
         """
         Initializes a linear layer with specified weight initialization and optional dropout.
         
@@ -63,11 +48,18 @@ class Linear(Layer):
             dropout (float, optional): Dropout rate. Defaults to None.
         """
         super().__init__()
+        self.activation = get_activation(activation, dropout) if activation != "none" else None
         
-        self.weights, self.bias = self.initialize_weights(shape, initialize_type)
+        self.weights, self.bias = self.initialize_weights(input_dim, output_dim, initialize_type)
 
+    def get_parameters(self):
 
-    def initialize_weights(self, shape, initialize_type):
+        return {"weights":self.weights,"bias":self.bias}
+    
+    def set_parameters(self,parameters):
+        self.weights = parameters["weights"]
+        self.bias = parameters["bias"]
+    def initialize_weights(self,input_dim, output_dim, initialize_type="xavier"):   
         """
         Initializes weights and biases based on the specified initialization method.
         
@@ -78,12 +70,7 @@ class Linear(Layer):
         Returns:
             tuple: Initialized weight matrix and bias vector.
         """
-        self.momentum_w = np.zeros(shape)
-        self.momentum_b = np.zeros((1, shape[1]))
-        self.Accumelated_Gsquare_w = np.zeros(shape)
-        self.Accumelated_Gsquare_b = np.zeros((1, shape[1]))
 
-        input_dim, output_dim = shape
 
         if initialize_type == 'zero':
             w = np.zeros((input_dim, output_dim))
@@ -122,15 +109,22 @@ class Linear(Layer):
             np.ndarray: Output of the affine transformation.
         """
         self.input = input
-        if self.input.ndim == 4:  # If input is 4D (e.g., [B, C, H, W])
-            B, C, H, W = self.input.shape
-            self.input = self.input.reshape(B, -1)  # Flatten to [B, C*H*W]
-        elif self.input.ndim != 2:  # If input is not 2D or 4D, raise an error
+        if self.input.data.ndim == 4:  # If input is 4D (e.g., [B, C, H, W])
+            B, C, H, W = self.input.data.shape
+            parents = self.input.parents
+            grad_fn = self.input._grad_fn
+            self.input = Tensor(self.input.data.reshape(B, -1))  # Flatten to [B, C*H*W]
+            self.input.parents = parents
+            self.input._grad_fn = grad_fn
+        elif self.input.data.ndim != 2:  # If input is not 2D or 4D, raise an error
             raise ValueError(f"Linear layer received input of unsupported shape {self.input.shape}")
         
-        out = (self.input @ self.weights) + self.bias  # Affine transformation
+        out = (self.input.data @ self.weights.data) + self.bias.data  
+        if self.activation is not None:
+            out = self.activation(out)
         self.out = Tensor(out, requires_grad=True)    
-        self.out._grad_fn = self.backward  # Set the backward function for autograd
+        self.out._grad_fn = self.backward 
+        self.out.parents = [self.input] # Set the backward function for autograd
         return self.out
 
     def backward(self, grad):
@@ -144,23 +138,20 @@ class Linear(Layer):
         Returns:
             np.ndarray: Gradient of loss with respect to layer input.
         """
-        
+        grad = self.activation.backward(grad) if self.activation is not None else grad
         
         # Gradient of loss w.r.t. weights
-        self.weights.grad = self.input.T @ grad
+        self.weights.grad = self.input.data.T @ grad
 
         # Gradient of loss w.r.t. bias
         self.bias.grad = np.sum(grad, axis=0, keepdims=True)
         
         # Gradient of loss w.r.t. input
-        self.input.grad = grad @ self.weights.T
+        self.input.assign_grad(grad @ self.weights.data.T)
         
-        assert self.grad_w.shape == self.weights.shape
-        assert self.grad_b.shape == self.bias.shape
-        assert self.loss_wrt_input.shape == self.input.shape
 
 class Conv2d(Layer):
-    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0, initialize_type="xavier"):
+    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0, initialize_type="xavier",activation="none",dropout=None):
         """
         Initializes a 2D convolutional layer.
         
@@ -178,6 +169,7 @@ class Conv2d(Layer):
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
+        self.activation = get_activation(activation, dropout) if activation != "none" else None
 
         # Convolution operation utility
         self.convolver = FastConvolver()
@@ -188,6 +180,10 @@ class Conv2d(Layer):
         # Initialize weights and biases based on selected method
         self.weights, self.bias = self.initialize_weights(initialize_type)
 
+
+    def get_parameters(self):
+
+        return {"weights":self.weights,"bias":self.bias}
     def initialize_weights(self, initialize_type="xavier"):
         """
         Initializes weights and biases for the Conv2D layer.
@@ -217,18 +213,9 @@ class Conv2d(Layer):
         # Bias is usually initialized to zero
         b = np.zeros((1, self.output_channels, 1, 1))
 
-        self.grad_w = np.zeros_like(w)
-        self.grad_b = np.zeros_like(b)
 
-        # Momentum storage (for optimizers like Adam, Momentum SGD, etc.)
-        self.momentum_w = np.zeros_like(w)
-        self.momentum_b = np.zeros_like(b)
 
-        # Storage for squared gradients (for Adam, RMSprop, etc.)
-        self.Accumelated_Gsquare_w = np.zeros_like(w)
-        self.Accumelated_Gsquare_b = np.zeros_like(b)
-
-        return w, b
+        return Tensor(w, requires_grad=True),Tensor(b, requires_grad=True)  # Return Tensor objects for w, b
 
     def __call__(self, input,**kwargs):
         """
@@ -241,18 +228,23 @@ class Conv2d(Layer):
         Returns:
             np.ndarray: Output tensor after convolution.
         """
-        if input.ndim != 4:
-            raise ValueError(f"Expected 4D input (batch_size, channels, height, width), got shape {input.shape}")
-        if input.shape[1] != self.input_channels:
-            raise ValueError(f"Expected {self.input_channels} input channels, got {input.shape[1]}")
+        if input.data.ndim != 4:
+            raise ValueError(f"Expected 4D input (batch_size, channels, height, width), got shape {input.data.shape}")
+        if input.data.shape[1] != self.input_channels:
+            raise ValueError(f"Expected {self.input_channels} input channels, got {input.data.shape[1]}")
 
         self.input = input
-        self.output, self.col_matrix = self.convolver.convolve(self.input, self.weights, stride=self.stride, padding=self.padding)
-        self.output += self.bias
+        output, self.col_matrix = self.convolver.convolve(self.input.data, self.weights.data, stride=self.stride, padding=self.padding)
+        output = output + self.bias.data
+        if self.activation is not None:
+            output = self.activation(output)
+        self.output = Tensor(output,requires_grad=True)
+        self.output._grad_fn = self.backward 
+        self.output.parents = [self.input]
 
         return self.output
 
-    def backward(self, output_grad, **kwargs):
+    def backward(self, output_grad):
         """
         Computes the backward pass of the convolution operation.
         
@@ -262,28 +254,28 @@ class Conv2d(Layer):
         Returns:
             np.ndarray: Gradient of the loss with respect to the input tensor.
         """
-        B, F, H_out, W_out = self.output.shape
+        B, F, H_out, W_out = self.output.data.shape
         
         # Gradient wrt biases
-        output_grad = output_grad.reshape(self.output.shape)
-        self.grad_b = np.sum(output_grad, axis=(0, 2, 3), keepdims=True)
-        assert self.grad_b.shape == self.bias.shape
+        # output_grad = output_grad.reshape(self.output.shape)
+        self.bias.grad = np.sum(output_grad, axis=(0, 2, 3), keepdims=True)
+        # assert self.bias.grad.shape == self.bias.shape
         
         # Gradient wrt weights
         grad_reshaped = output_grad.transpose(1, 0, 2, 3).reshape(self.output_channels, -1)  # Shape: (F, B * H_out * W_out)
         grad_kernel_matrix = grad_reshaped @ self.col_matrix  # Use cached `col_matrix`
-        self.grad_w = grad_kernel_matrix.reshape(self.output_channels, self.input_channels, self.kernel_size, self.kernel_size)
-        assert self.grad_w.shape == self.weights.shape
+        self.weights.grad = grad_kernel_matrix.reshape(self.output_channels, self.input_channels, self.kernel_size, self.kernel_size)
+        # assert self.grad_w.shape == self.weights.shape
         
         # Gradient wrt input
-        kernel_matrix = self.weights.reshape(self.output_channels, -1).T  # Shape: (C*k*k, F)
+        kernel_matrix = self.weights.data.reshape(self.output_channels, -1).T  # Shape: (C*k*k, F)
         dout_matrix = output_grad.transpose(0, 2, 3, 1).reshape(B * H_out * W_out, F)
         dX_col = dout_matrix @ kernel_matrix.T
 
         # Use col2im_accumulation to fold dX_col back to the padded input shape.
         dInput_padded = self.convolver.col2im_accumulation(
             dX_col=dX_col,
-            input_shape=self.input.shape, 
+            input_shape=self.input.data.shape, 
             filter_height=self.kernel_size,
             filter_width=self.kernel_size,
             stride=self.stride,
@@ -296,8 +288,10 @@ class Conv2d(Layer):
         else:
             dInput = dInput_padded
 
-        assert dInput.shape == self.input.shape
-        return dInput
+        self.input.assign_grad(dInput)
+        
+        # assert dInput.shape == self.input.shape
+        
 
 
 
@@ -328,12 +322,13 @@ class MaxPool2d(Module):
         Returns:
             np.ndarray: Output tensor after max pooling.
         """
-        B, C, H, W = X.shape
+        self.input = X
+        B, C, H, W = self.input.data.shape
         H_k, W_k = self.kernel_size
         stride_h, stride_w = self.stride
 
         padded_X = np.pad(
-            X,
+            self.input.data,
             ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)),
             mode='constant'
         )
@@ -350,15 +345,19 @@ class MaxPool2d(Module):
         output = output.reshape(B, C, H_out, H_out)
 
         self.cache['out_shape'] = output.shape
-        self.cache['input'] = X
+        self.cache['input'] = self.input
         self.cache['max_indices'] = (
             max_indices,
             windows.shape,
             (stride_h, stride_w)
         )
-        return output
 
-    def backward(self, grad_output, **kwargs):
+        self.output = Tensor(output,requires_grad=True)
+        self.output._grad_fn = self.backward
+        self.output.parents = [self.input]
+        return self.output
+
+    def backward(self, grad_output):
         """
         Backward pass for max pooling.
 
@@ -368,7 +367,7 @@ class MaxPool2d(Module):
         Returns:
             np.ndarray: Gradient of the loss with respect to the input.
         """
-        X = self.cache['input']
+        X = self.cache['input'].data
         max_indices, window_shape, strides = self.cache['max_indices']
         grad_output = grad_output.reshape(*self.cache['out_shape'])
         B, C, H_out, W_out = grad_output.shape
@@ -407,8 +406,8 @@ class MaxPool2d(Module):
         # Accumulate gradients using vectorized scatter-add
         grad_input = np.zeros_like(X)
         np.add.at(grad_input, (valid_b, valid_c, valid_h, valid_w), valid_grad)
-
-        return grad_input
+        self.input.assign_grad(grad_input)
+        
 
 
 class batchnorm1d(Layer):

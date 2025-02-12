@@ -37,6 +37,28 @@ def get_optimizer(name, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, 
         raise ValueError("Unknown optimizer: " + name)
 
 
+
+class sgd_tensor:
+    def __init__(self,params, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
+        self.learning_rate = learning_rate
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.EMA = EMA
+        self.clip_value = clip_value
+        self.params = params
+
+    def step(self, **kwargs):
+        for param in self.params:
+            if param.grad is None:
+                raise ValueError("Gradient for weights is None, cannot perform update.")
+            param.data = param.data - self.learning_rate * param.grad
+
+
+
+   
+
+    
+
 class Optimizer:
     """
     Base class for optimizers.

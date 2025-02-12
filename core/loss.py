@@ -36,7 +36,7 @@ def binary_cross_entropy(y_true, y_pred):
     y_pred_clipped = np.clip(y_pred, EPSILON, 1 - EPSILON)
     loss = -np.mean(y_true * np.log(y_pred_clipped) + (1 - y_true) * np.log(1 - y_pred_clipped), axis=0)
     grad = (y_pred_clipped - y_true) / B
-    return Tensor(loss), Tensor(grad) 
+    return loss, grad
 
 
 def sparse_categorical_cross_entropy(y_true, y_pred, axis=1):
@@ -84,7 +84,7 @@ def sparse_categorical_cross_entropy(y_true, y_pred, axis=1):
     B = y_pred.shape[0]
     loss = -np.mean(np.sum(y_dense * np.log(y_pred + EPSILON), axis=axis), axis=0)
     grad = (y_pred - y_dense) / B
-    return Tensor(loss), Tensor(grad) 
+    return loss, grad 
 
 
 def mean_squared_error(y_true, y_pred):
@@ -145,3 +145,36 @@ def get_loss_fn(loss_fn_name):
         return mean_squared_error
     else:
         raise ValueError("Unknown loss function: " + loss_fn_name)
+
+
+def loss_wrapper(loss_fn, y_true, y_pred):
+    """
+    Wrap a loss function so that it returns a Tensor with a custom backward function.
+    
+    Parameters:
+      loss_fn: a function that takes (y_true, y_pred_data) and returns (loss_value, grad)
+      y_true: the ground-truth labels (numpy array)
+      y_pred: the prediction Tensor (our custom Tensor) from the network.
+      
+    Returns:
+      A Tensor that holds the loss value and whose backward function propagates the loss gradient to y_pred.
+    """
+    # Compute loss value and gradient from your loss function.
+    # Note: y_pred.data is a numpy array.
+    loss_value, loss_grad = loss_fn(y_true, y_pred.data)
+    
+    # Wrap the loss value as a Tensor.
+    # Make sure it's a numpy array (or scalar) of the proper shape, e.g. (1,) or a 0-dim array.
+    loss_tensor = Tensor(np.array(loss_value), requires_grad=True)
+    
+    # Define a custom backward function for the loss Tensor.
+    # 'grad' here is the gradient flowing from the loss node (usually a scalar, 1.0).
+    def _backward(grad):
+        # Apply the chain rule: propagate (loss_grad * grad) to y_pred.
+        # (loss_grad is already computed as d(loss)/d(y_pred_data))
+        y_pred.assign_grad(loss_grad * grad)
+    
+    loss_tensor._grad_fn = _backward
+    loss_tensor.parents = [y_pred]
+    
+    return loss_tensor

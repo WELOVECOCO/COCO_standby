@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from core.tensor import Tensor
 
 @staticmethod
-def get_activation(activation_name):
+def get_activation(activation_name,dropout=None):
     """
     Retrieve an activation function instance based on its name.
 
@@ -17,19 +17,19 @@ def get_activation(activation_name):
         ValueError: If the activation function name is not recognized.
     """
     if activation_name is None:
-        return no_activation()
+        return no_activation(dropout)
     elif activation_name == "relu":
-        return relu()
+        return relu(dropout)
     elif activation_name == "sigmoid":
-        return sigmoid()
+        return sigmoid(dropout)
     elif activation_name == "tanh":
-        return tanh()
+        return tanh(dropout)
     elif activation_name == "softmax":
-        return softmax()
+        return softmax(dropout)
     elif activation_name == "leaky_relu":
-        return leaky_relu()
+        return leaky_relu(dropout)
     elif activation_name == "none" or activation_name == None:
-        return no_activation()
+        return no_activation(dropout)
     else:
         raise ValueError(f"Unknown activation function: {activation_name}")
     
@@ -87,13 +87,11 @@ class tanh(Activation):
         Returns:
             ndarray: Transformed tensor using tanh.
         """
-        output = np.tanh(x)
-        self.output = Tensor(output, requires_grad=True)
+        self.output = np.tanh(x)
         
         self.apply_dropout()
         
-        self.output._grad_fn = self.backward
-        self.output.parents = [x]
+        
         
         return self.output
 
@@ -107,7 +105,7 @@ class tanh(Activation):
         Returns:
             ndarray: Gradient after applying the derivative of tanh.
         """
-        self.parents[0].grad = grad * (1 - self.output ** 2)
+        return grad * (1 - self.output ** 2)
 
 
 class sigmoid(Activation):
