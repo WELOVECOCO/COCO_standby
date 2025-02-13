@@ -1,3 +1,4 @@
+import numpy as np
 class ADD_BACKWARD:
     def __init__(self, a, b):
         self.a = a
@@ -87,6 +88,5 @@ class SUM_BACKWARD:
 
     def __call__(self, grad):
         if self.a.requires_grad:
-            grad_expanded = grad if self.keepdims else np.expand_dims(grad, axis)
+            grad_expanded = grad if self.keepdims else np.expand_dims(grad, self.axis)
             self.a.assign_grad(np.ones_like(self.a.data) * grad_expanded)
-

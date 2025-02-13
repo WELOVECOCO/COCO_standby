@@ -5,33 +5,23 @@ from collections import deque
 
 class Tensor:
     def __init__(self, data, requires_grad=True):
-        """
-        Initializes a Tensor object with data, gradient tracking, and computational graph metadata.
-        """
+        """Initialize a Tensor with data, gradient tracking, and computational graph details."""
         if not isinstance(data, np.ndarray):
             data = np.array(data)
         self.data = data
         self.grad = None
         self.requires_grad = requires_grad
-        self._grad_fn = None  # Function to compute gradient for this op.
-        self.parents = []  # Tensors that contributed to this Tensor.
+        self._grad_fn = None
+        self.parents = []
 
     def __repr__(self):
-        """
-        Returns a string representation of the Tensor object.
-        """
         return f"Tensor(data={self.data}, requires_grad={self.requires_grad})"
 
     def shape(self):
-        """
-        Returns the shape of the tensor data.
-        """
         return self.data.shape
 
     def assign_grad(self, grad):
-        """
-        Safely assigns or accumulates gradients to the tensor during backpropagation.
-        """
+        """Safely assign or accumulate gradients."""
         if not self.requires_grad:
             return
         if grad is None:
@@ -42,15 +32,11 @@ class Tensor:
             self.grad += grad
 
     def zero_grad(self):
-        """
-        Resets the gradient of the tensor to None.
-        """
+        """Reset the gradient to None."""
         self.grad = None
 
     def _topological_sort(self):
-        """
-        Computes the topological order of the computation graph using DFS.
-        """
+        """Compute topological order via DFS (post-order traversal)."""
         visited = set()
         order = []
 
@@ -65,9 +51,7 @@ class Tensor:
         return order[::-1]
 
     def backward(self, grad=None, retain_graph=False):
-        """
-        Performs backpropagation through the computational graph.
-        """
+        """Perform backpropagation through the computational graph."""
         if not self.requires_grad:
             return
 
@@ -87,9 +71,7 @@ class Tensor:
 
     # Operator Overloading
     def __add__(self, other):
-        """
-        Performs element-wise addition of tensors and records the operation for autograd.
-        """
+        """Element-wise addition of two tensors."""
         if not isinstance(other, Tensor):
             other = Tensor(other, requires_grad=False)
         requires_grad = self.requires_grad or other.requires_grad
@@ -102,9 +84,7 @@ class Tensor:
         return self.__add__(other)
 
     def __mul__(self, other):
-        """
-        Performs element-wise multiplication of tensors and records the operation for autograd.
-        """
+        """Element-wise multiplication of two tensors."""
         if not isinstance(other, Tensor):
             other = Tensor(other, requires_grad=False)
         requires_grad = self.requires_grad or other.requires_grad
@@ -117,9 +97,7 @@ class Tensor:
         return self.__mul__(other)
 
     def __matmul__(self, other):
-        """
-        Performs matrix multiplication between tensors and records the operation for autograd.
-        """
+        """Matrix multiplication of two tensors."""
         if not isinstance(other, Tensor):
             other = Tensor(other, requires_grad=False)
         requires_grad = self.requires_grad or other.requires_grad
@@ -129,41 +107,45 @@ class Tensor:
         return out
 
     def __sub__(self, other):
-        """
-        Performs element-wise subtraction of tensors and records the operation for autograd.
-        """
-        return self + (-other)
-
-    def __rsub__(self, other):
-        return other + (-self)
-
-    def __neg__(self):
-        """
-        Performs element-wise negation of a tensor and records the operation for autograd.
-        """
-        return self * -1
-
-    def __truediv__(self, other):
-        """
-        Performs element-wise division of tensors using reciprocal multiplication and records the operation for autograd.
-        """
+        """Element-wise subtraction of two tensors."""
         if not isinstance(other, Tensor):
             other = Tensor(other, requires_grad=False)
-        return self * other.pow(-1)
+        requires_grad = self.requires_grad or other.requires_grad
+        out = Tensor(self.data - other.data, requires_grad)
+        out.parents = [self, other]
+        out._grad_fn = SUB_BACKWARD(self, other)
+        return out
+
+    def __rsub__(self, other):
+        return other - self
+
+    def __neg__(self):
+        """Negation of a tensor."""
+        out = Tensor(-self.data, self.requires_grad)
+        out.parents = [self]
+        out._grad_fn = NEG_BACKWARD(self)
+        return out
+
+    def __truediv__(self, other):
+        """Element-wise division of two tensors."""
+        if not isinstance(other, Tensor):
+            other = Tensor(other, requires_grad=False)
+        requires_grad = self.requires_grad or other.requires_grad
+        out = Tensor(self.data / other.data, requires_grad)
+        out.parents = [self, other]
+        out._grad_fn = DIV_BACKWARD(self, other)
+        return out
 
     def pow(self, power):
-        """
-        Raises the tensor to a specified power and records the operation for autograd.
-        """
+        """Raise tensor elements to a power."""
         out = Tensor(self.data ** power, self.requires_grad)
         out.parents = [self]
+        out._grad_fn = POW_BACKWARD(self, power)
         return out
 
     def sum(self, axis=None, keepdims=False):
-        """
-        Computes the sum of all elements in the tensor along a specified axis and records the operation for autograd.
-        """
+        """Compute sum over a specified axis."""
         out = Tensor(self.data.sum(axis=axis, keepdims=keepdims), self.requires_grad)
         out.parents = [self]
+        out._grad_fn = SUM_BACKWARD(self, axis, keepdims)
         return out
-
