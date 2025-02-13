@@ -89,3 +89,4 @@ class SUM_BACKWARD:
         if self.a.requires_grad:
             grad_expanded = grad if self.keepdims else np.expand_dims(grad, axis)
             self.a.assign_grad(np.ones_like(self.a.data) * grad_expanded)
+
