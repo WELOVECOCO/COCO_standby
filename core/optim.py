@@ -1,5 +1,5 @@
 import numpy as np
-
+from collections import defaultdict
 
 def get_optimizer(name, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
     """
@@ -31,27 +31,13 @@ def get_optimizer(name, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, 
         return NAdam(learning_rate=learning_rate, beta1=beta1, beta2=beta2, EMA=EMA, clip_value=clip_value)
     elif name == "adagrad":
         return AdaGrad(learning_rate=learning_rate, beta1=beta1, beta2=beta2, EMA=EMA, clip_value=clip_value)
-    elif name == "rmsprop":
-        return RMSprop(learning_rate=learning_rate, beta1=beta1, beta2=beta2, EMA=EMA, clip_value=clip_value)
     else:
         raise ValueError("Unknown optimizer: " + name)
 
 
 
-class sgd_tensor:
-    def __init__(self,params, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
-        self.learning_rate = learning_rate
-        self.beta1 = beta1
-        self.beta2 = beta2
-        self.EMA = EMA
-        self.clip_value = clip_value
-        self.params = params
 
-    def step(self, **kwargs):
-        for param in self.params:
-            if param.grad is None:
-                raise ValueError("Gradient for weights is None, cannot perform update.")
-            param.data = param.data - self.learning_rate * param.grad
+
 
 
 
@@ -60,27 +46,16 @@ class sgd_tensor:
     
 
 class Optimizer:
-    """
-    Base class for optimizers.
 
-    This class defines the interface and holds common attributes for all optimizers.
-
-    Attributes:
-        learning_rate (float): Step size for parameter updates.
-        beta1 (float): Decay factor for momentum.
-        beta2 (float): Decay factor for second moment estimates.
-        EMA (bool): Whether to use Exponential Moving Average for momentum.
-        clip_value (float): Maximum allowed absolute value for gradients.
-    """
-
-    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
+    def __init__(self,params, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
         self.learning_rate = learning_rate
         self.beta1 = beta1
         self.beta2 = beta2
         self.EMA = EMA
         self.clip_value = clip_value
+        self.params = params
 
-    def __call__(self, layer, **kwargs):
+    def step(self):
         """
         Placeholder for the optimizer update logic.
         Subclasses must implement this method.
@@ -92,15 +67,27 @@ class Optimizer:
         raise NotImplementedError("Subclasses must implement this method.")
 
 
+class sgd(Optimizer):
+    def __init__(self,params, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
+       super().__init__(params, learning_rate, beta1, beta2, EMA, clip_value)
+
+    def step(self):
+        for param in self.params:
+            if param.grad is None:
+                raise ValueError("Gradient for weights is None, cannot perform update.")
+            param.data = param.data - self.learning_rate * param.grad
+
+
 class momentum(Optimizer):
     """
     Momentum optimizer for gradient descent.
     """
 
-    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
-        super().__init__(learning_rate, beta1, beta2, EMA, clip_value)
+    def __init__(self,params, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
+       super().__init__(params, learning_rate, beta1, beta2, EMA, clip_value)
+       self.momentum = defaultdict(lambda: None)
 
-    def __call__(self, layer, **kwargs):
+    def step(self):
         """
         Perform a momentum-based parameter update.
 
@@ -111,86 +98,67 @@ class momentum(Optimizer):
                 - momentum_w, momentum_b: Previous momentum values.
             **kwargs: Optional overrides for learning_rate, beta1, etc.
         """
-        # Apply gradient clipping if needed.
-        if self.clip_value:
-            layer.grad_w = np.clip(layer.grad_w, -self.clip_value, self.clip_value)
+        for param in self.params:
 
-        if self.EMA:
-            layer.momentum_w = self.beta1 * layer.momentum_w + (1 - self.beta1) * layer.grad_w
-            layer.momentum_b = self.beta1 * layer.momentum_b + (1 - self.beta1) * layer.grad_b
-            layer.weights -= self.learning_rate * layer.momentum_w
-            layer.bias -= self.learning_rate * layer.momentum_b
-        else:
-            layer.momentum_w = self.beta1 * layer.momentum_w + self.learning_rate * layer.grad_w
-            layer.momentum_b = self.beta1 * layer.momentum_b + self.learning_rate * layer.grad_b
-            layer.weights -= layer.momentum_w
-            layer.bias -= layer.momentum_b
+            if self.momentum[id(param)] is None:
+                self.momentum[id(param)] = np.zeros_like(param.grad)
+
+            if self.clip_value:
+               param.grad = np.clip(param.grad, -self.clip_value, self.clip_value)
+
+            if self.EMA:
+                momentum_value = self.momentum[id(param)]
+                momentum_value = self.beta1 * momentum_value + (1 - self.beta1) * param.grad
+                self.momentum[id(param)] = momentum_value
+                param.data -= self.learning_rate * momentum_value
+            else:
+                momentum_value = self.momentum[id(param)]
+                momentum_value = self.beta1 * momentum_value + self.learning_rate * param.grad
+                self.momentum[id(param)] = momentum_value
+                param.data -= momentum_value
 
 
 class nag(Optimizer):
     """
     Nesterov Accelerated Gradient (NAG) optimizer.
     """
+    def __init__(self,params, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
+       super().__init__(params, learning_rate, beta1, beta2, EMA, clip_value)
+       self.momentum = defaultdict(lambda: None)
 
-    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
-        super().__init__(learning_rate, beta1, beta2, EMA, clip_value)
-
-    def __call__(self, layer, **kwargs):
+    def step(self):
         """
-        Perform a parameter update using Nesterov Accelerated Gradient.
+        Perform a momentum-based parameter update.
 
         Args:
             layer: Layer object with attributes:
-                - weights, bias, grad_w, grad_b, momentum_w, momentum_b.
-            **kwargs: Optional overrides.
+                - weights, bias: Parameters.
+                - grad_w, grad_b: Gradients.
+                - momentum_w, momentum_b: Previous momentum values.
+            **kwargs: Optional overrides for learning_rate, beta1, etc.
         """
-        if self.clip_value:
-            layer.grad_w = np.clip(layer.grad_w, -self.clip_value, self.clip_value)
+        for param in self.params:
 
-        if self.EMA:
-            layer.momentum_w = self.beta1 * layer.momentum_w + (1 - self.beta1) * layer.grad_w
-            layer.momentum_b = self.beta1 * layer.momentum_b + (1 - self.beta1) * layer.grad_b
-        else:
-            layer.momentum_w = self.beta1 * layer.momentum_w + self.learning_rate * layer.grad_w
-            layer.momentum_b = self.beta1 * layer.momentum_b + self.learning_rate * layer.grad_b
+            if self.momentum[id(param)] is None:
+                self.momentum[id(param)] = np.zeros_like(param.grad)
 
-        # Standard update.
-        layer.weights -= layer.momentum_w
-        layer.bias -= layer.momentum_b
+            if self.clip_value:
+               param.grad = np.clip(param.grad, -self.clip_value, self.clip_value)
 
-        # Lookahead step.
-        layer.weights -= self.beta1 * layer.momentum_w
-        layer.bias -= self.beta1 * layer.momentum_b
+            if self.EMA:
+                momentum_value = self.momentum[id(param)]
+                momentum_value = self.beta1 * momentum_value + (1 - self.beta1) * param.grad
+                self.momentum[id(param)] = momentum_value
+                param.data -= self.learning_rate * momentum_value
+            else:
+                momentum_value = self.momentum[id(param)]
+                momentum_value = self.beta1 * momentum_value + self.learning_rate * param.grad
+                self.momentum[id(param)] = momentum_value
+                param.data -= momentum_value
 
+            # Lookahead step. TODO: Check this implementation for correctness
+            param.data -= self.beta1 * self.momentum[id(param)]
 
-class sgd(Optimizer):
-    """
-    Stochastic Gradient Descent (SGD) optimizer.
-    """
-
-    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
-        super().__init__(learning_rate, beta1, beta2, EMA, clip_value)
-
-    def __call__(self, layer, **kwargs):
-        """
-        Perform a parameter update using SGD.
-
-        Args:
-            layer: Layer object with attributes:
-                - weights, bias, grad_w, grad_b.
-            **kwargs: Optional overrides.
-
-        Raises:
-            ValueError: If the weight gradients are all zero.
-        """
-        if np.all(layer.grad_w == 0):
-            raise ValueError("Gradient for weights is zero, cannot perform update.")
-
-        if self.clip_value:
-            layer.grad_w = np.clip(layer.grad_w, -self.clip_value, self.clip_value)
-
-        layer.weights -= self.learning_rate * layer.grad_w
-        layer.bias -= self.learning_rate * layer.grad_b
 
 
 class adam(Optimizer):
@@ -198,45 +166,46 @@ class adam(Optimizer):
     Adaptive Moment Estimation (Adam) optimizer.
     """
 
-    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
-        super().__init__(learning_rate, beta1, beta2, EMA, clip_value)
-        self.eps = 1e-8  # Small epsilon to avoid division by zero
+    def __init__(self,params, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
+       super().__init__(params, learning_rate, beta1, beta2, EMA, clip_value)
+       self.momentum = defaultdict(lambda: None)
+       self.Gsquare = defaultdict(lambda: None)
+       self.t = 0
 
-    def __call__(self, layer, **kwargs):
-        """
-        Perform a parameter update using Adam.
+    def step(self):
+        self.t += 1
+        for param in self.params:
 
-        Args:
-            layer: Layer object with attributes:
-                - weights, bias, grad_w, grad_b,
-                  momentum_w, momentum_b, Accumelated_Gsquare_w, Accumelated_Gsquare_b, and t (time step).
-            **kwargs: Optional overrides.
-        """
-        if self.clip_value:
-            layer.grad_w = np.clip(layer.grad_w, -self.clip_value, self.clip_value)
+            if self.momentum[id(param)] is None:
+                self.momentum[id(param)] = np.zeros_like(param.grad)
 
-        # Update time step.
-        layer.t += 1
+            if self.Gsquare[id(param)] is None:
+                self.Gsquare[id(param)] = np.zeros_like(param.grad)
 
-        # Update biased first moment estimate.
-        layer.momentum_w = self.beta1 * layer.momentum_w + (1 - self.beta1) * layer.grad_w
-        layer.momentum_b = self.beta1 * layer.momentum_b + (1 - self.beta1) * layer.grad_b
+            if self.clip_value:
+               param.grad = np.clip(param.grad, -self.clip_value, self.clip_value)
 
-        # Update biased second raw moment estimate.
-        layer.Accumelated_Gsquare_w = self.beta2 * layer.Accumelated_Gsquare_w + (1 - self.beta2) * (layer.grad_w ** 2)
-        layer.Accumelated_Gsquare_b = self.beta2 * layer.Accumelated_Gsquare_b + (1 - self.beta2) * (layer.grad_b ** 2)
+            if self.EMA:
+                momentum_value = self.momentum[id(param)]
+                momentum_value = self.beta1 * momentum_value + (1 - self.beta1) * param.grad
+                self.momentum[id(param)] = momentum_value
+            else:
+                momentum_value = self.momentum[id(param)]
+                momentum_value = self.beta1 * momentum_value + self.learning_rate * param.grad
+                self.momentum[id(param)] = momentum_value
 
-        # Compute bias-corrected estimates.
-        vw_corrected = layer.momentum_w / (1 - self.beta1 ** layer.t)
-        vb_corrected = layer.momentum_b / (1 - self.beta1 ** layer.t)
-        Gw_corrected = layer.Accumelated_Gsquare_w / (1 - self.beta2 ** layer.t)
-        Gb_corrected = layer.Accumelated_Gsquare_b / (1 - self.beta2 ** layer.t)
+            Gsquare_value = self.Gsquare[id(param)]
+            # Update biased second raw moment estimate.
+            Gsquare_value = self.beta2 * Gsquare_value + (1 - self.beta2) * (param.grad ** 2)
+            self.Gsquare[id(param)] = Gsquare_value
+            # Compute bias-corrected estimates.
+            M_corrected = momentum_value / (1 - 0.99 ** self.t)
+            G_corrected = Gsquare_value / (1 - 0.99 ** self.t)
 
-        ita_w = self.learning_rate / (np.sqrt(Gw_corrected) + self.eps)
-        ita_b = self.learning_rate / (np.sqrt(Gb_corrected) + self.eps)
+            ita_w = self.learning_rate / (np.sqrt(G_corrected) + self.eps)
 
-        layer.weights -= ita_w * vw_corrected
-        layer.bias -= ita_b * vb_corrected
+            param.data -= ita_w * M_corrected
+
 
 
 class NAdam(Optimizer):
@@ -244,49 +213,47 @@ class NAdam(Optimizer):
     Nesterov-accelerated Adaptive Moment Estimation (NAdam) optimizer.
     """
 
-    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
-        super().__init__(learning_rate, beta1, beta2, EMA, clip_value)
-        self.eps = 1e-8
+    def __init__(self,params, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
+       super().__init__(params, learning_rate, beta1, beta2, EMA, clip_value)
+       self.momentum = defaultdict(lambda: None)
+       self.Gsquare = defaultdict(lambda: None)
+       self.t = 0
 
-    def __call__(self, layer, **kwargs):
-        """
-        Perform a parameter update using NAdam.
+    def step(self):
+        self.t += 1
+        for param in self.params:
 
-        Args:
-            layer: Layer object with attributes:
-                - weights, bias, grad_w, grad_b,
-                  momentum_w, momentum_b, Accumelated_Gsquare_w, Accumelated_Gsquare_b, t, and eps.
-            **kwargs: Optional overrides.
-        """
-        if self.clip_value:
-            layer.grad_w = np.clip(layer.grad_w, -self.clip_value, self.clip_value)
+            if self.momentum[id(param)] is None:
+                self.momentum[id(param)] = np.zeros_like(param.grad)
 
-        layer.t += 1
-        # Update biased first moment estimates.
-        layer.momentum_w = self.beta1 * layer.momentum_w + (1 - self.beta1) * layer.grad_w
-        layer.momentum_b = self.beta1 * layer.momentum_b + (1 - self.beta1) * layer.grad_b
+            if self.Gsquare[id(param)] is None:
+                self.Gsquare[id(param)] = np.zeros_like(param.grad)
 
-        # Update biased second moment estimates.
-        layer.Accumelated_Gsquare_w = self.beta2 * layer.Accumelated_Gsquare_w + (1 - self.beta2) * (layer.grad_w ** 2)
-        layer.Accumelated_Gsquare_b = self.beta2 * layer.Accumelated_Gsquare_b + (1 - self.beta2) * (layer.grad_b ** 2)
+            if self.clip_value:
+               param.grad = np.clip(param.grad, -self.clip_value, self.clip_value)
 
-        # Bias corrections.
-        Gw_corrected = layer.Accumelated_Gsquare_w / (1 - np.power(self.beta2, layer.t))
-        Gb_corrected = layer.Accumelated_Gsquare_b / (1 - np.power(self.beta2, layer.t))
-        vw_corrected = layer.momentum_w / (1 - np.power(self.beta1, layer.t))
-        vb_corrected = layer.momentum_b / (1 - np.power(self.beta1, layer.t))
+            if self.EMA:
+                momentum_value = self.momentum[id(param)]
+                momentum_value = self.beta1 * momentum_value + (1 - self.beta1) * param.grad
+                self.momentum[id(param)] = momentum_value
+            else:
+                momentum_value = self.momentum[id(param)]
+                momentum_value = self.beta1 * momentum_value + self.learning_rate * param.grad
+                self.momentum[id(param)] = momentum_value
 
-        ita_w = self.learning_rate / (np.sqrt(Gw_corrected) + layer.eps)
-        ita_b = self.learning_rate / (np.sqrt(Gb_corrected) + layer.eps)
+            Gsquare_value = self.Gsquare[id(param)]
+            # Update biased second raw moment estimate.
+            Gsquare_value = self.beta2 * Gsquare_value + (1 - self.beta2) * (param.grad ** 2)
+            self.Gsquare[id(param)] = Gsquare_value
+            # Compute bias-corrected estimates.
+            M_corrected = momentum_value / (1 - 0.99 ** self.t)
+            G_corrected = Gsquare_value / (1 - 0.99 ** self.t)
 
-        layer.weights -= ita_w * vw_corrected
-        layer.bias -= ita_b * vb_corrected
+            ita_w = self.learning_rate / (np.sqrt(G_corrected) + self.eps)
 
-        #TODO: Lookahead step need to be checked again (poor implementation)
+            param.data -= ita_w * M_corrected
 
-        # Lookahead step.
-        layer.weights -= self.beta1 * layer.momentum_w
-        layer.bias -= self.beta1 * layer.momentum_b
+            param.data -= self.beta1 * self.momentum[id(param)]
 
 
 class AdaGrad(Optimizer):
@@ -294,60 +261,27 @@ class AdaGrad(Optimizer):
     AdaGrad optimizer.
     """
 
-    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
-        super().__init__(learning_rate, beta1, beta2, EMA, clip_value)
+    def __init__(self,params, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
+       super().__init__(params, learning_rate, beta1, beta2, EMA, clip_value)
+       self.Gsquare = defaultdict(lambda: None)
         # Note: AdaGrad typically does not use beta parameters.
 
-    def __call__(self, layer, **kwargs):
-        """
-        Perform a parameter update using AdaGrad.
+    def __call__(self):
+        for param in self.params:
+            if self.Gsquare[id(param)] is None:
+                self.Gsquare[id(param)] = np.zeros_like(param.grad)
 
-        Args:
-            layer: Layer object with attributes:
-                - weights, bias, grad_w, grad_b,
-                  accumelated_Gsquare_w, accumelated_Gsquare_b, and eps.
-            **kwargs: Optional overrides.
-        """
-        if self.clip_value:
-            layer.grad_w = np.clip(layer.grad_w, -self.clip_value, self.clip_value)
+            if self.clip_value:
+               param.grad = np.clip(param.grad, -self.clip_value, self.clip_value)
 
-        # Accumulate squared gradients.
-        layer.accumelated_Gsquare_w += layer.grad_w ** 2
-        layer.accumelated_Gsquare_b += layer.grad_b ** 2
+            Gsquare_value = self.Gsquare[id(param)]
+            # Update biased second raw moment estimate.
+            Gsquare_value = self.beta2 * Gsquare_value + (1 - self.beta2) * (param.grad ** 2)
+            self.Gsquare[id(param)] = Gsquare_value
 
-        ita_w = self.learning_rate / (np.sqrt(layer.accumelated_Gsquare_w) + layer.eps)
-        ita_b = self.learning_rate / (np.sqrt(layer.accumelated_Gsquare_b) + layer.eps)
+        ita_w = self.learning_rate / (np.sqrt(Gsquare_value) + self.eps)
 
-        layer.weights -= ita_w * layer.grad_w
-        layer.bias -= ita_b * layer.grad_b
+        param.data -= ita_w * param.grad
 
 
-class RMSprop(Optimizer):
-    """
-    RMSprop optimizer.
-    """
-
-    def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
-        super().__init__(learning_rate, beta1, beta2, EMA, clip_value)
-        self.eps = 1e-8
-
-    def __call__(self, layer, **kwargs):
-        """
-        Perform a parameter update using RMSprop.
-
-        Args:
-            layer: Layer object with attributes:
-                - weights, bias, grad_w, grad_b,
-                  accumelated_Gsquare_w, accumelated_Gsquare_b, and eps.
-            **kwargs: Optional overrides.
-        """
-        if self.clip_value:
-            layer.grad_w = np.clip(layer.grad_w, -self.clip_value, self.clip_value)
-
-        layer.accumelated_Gsquare_w = self.beta2 * layer.accumela
-
-
-
-
-#TODO: ADAMW optimizers
 
