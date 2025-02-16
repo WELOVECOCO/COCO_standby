@@ -90,3 +90,21 @@ class SUM_BACKWARD:
         if self.a.requires_grad:
             grad_expanded = grad if self.keepdims else np.expand_dims(grad, self.axis)
             self.a.assign_grad(np.ones_like(self.a.data) * grad_expanded)
+
+
+class RESHAPE_BACKWARD:
+    def __init__(self, a):
+        self.a = a
+
+    def __call__(self, grad):
+        if self.a.requires_grad:
+            self.a.assign_grad(grad.reshape(self.a.data.shape))
+
+
+class TRANSPOSE_BACKWARD:
+    def __init__(self, a):
+        self.a = a
+
+    def __call__(self, grad, axes):
+        if self.a.requires_grad:
+            self.a.assign_grad(grad.transpose(*axes))

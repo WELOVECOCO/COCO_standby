@@ -8,7 +8,73 @@ It includes:
 import numpy as np
 from core import nn
 from core import optim
-import pickle
+import matplotlib.pyplot as plt
+def visualize_feature_maps(model, image):
+        """
+        Visualize feature maps for convolutional layers.
+        """
+        if image.ndim == 2:
+            image = image[np.newaxis, np.newaxis, :, :]
+        elif image.ndim == 3:
+            image = image[np.newaxis, :, :, :]
+        elif image.ndim == 4 and image.shape[0] != 1:
+            raise ValueError("Only single image batches are supported.")
+
+        featuremaps = []
+        model.forward(image, test=True, visualize=True)
+        cnn_layers = [layer for layer in model.layers.values() if isinstance(layer, nn.Conv2D)]
+        for layer in cnn_layers:
+            featuremaps.append(layer.output.data)
+        num_conv_layers = len(model.featuremaps)
+        if num_conv_layers == 0:
+            print("No convolutional layers found.")
+            return
+
+        # Create a separate figure for each convolutional layer
+        for layer_idx, fm in enumerate(model.featuremaps):
+            fm = fm[0]  # Remove batch dimension -> (C, H, W)
+            num_channels = fm.shape[0]
+
+            # Create a new figure for this layer
+            plt.figure(figsize=(16, 8))
+            plt.suptitle(f"Layer {layer_idx+1} Feature Maps", fontsize=14, y=1.02)
+
+            # Calculate grid dimensions
+            cols = 8  # Max 8 filters per row
+            rows = int(np.ceil(num_channels / cols))
+
+            # Plot each channel
+            for channel_idx in range(num_channels):
+                plt.subplot(rows, cols, channel_idx + 1)
+                channel_data = fm[channel_idx]
+
+                # Normalize to [0, 1] for better contrast
+                channel_data = (channel_data - channel_data.min()) / (channel_data.max() - channel_data.min() + 1e-8)
+
+                plt.imshow(channel_data, cmap='gray')
+                plt.axis('off')
+                plt.title(f'Ch{channel_idx+1}', fontsize=8)
+
+            plt.tight_layout(pad=1.0, w_pad=0.5, h_pad=1.0)  # Increase spacing
+            plt.show()  # Show layer-specific figure (will create multiple windows)
+
+
+def one_hot_encode(labels, num_classes=None):
+    """
+    Convert integer labels to one-hot encoded vectors.
+    """
+    if labels.ndim == 2:
+        # Check if all rows have exactly one `1` and the rest `0`
+        is_one_hot = np.all(np.isin(labels, [0, 1])) and np.all(labels.sum(axis=1) == 1)
+        if num_classes is not None:
+            is_one_hot = is_one_hot and (labels.shape[1] == num_classes)
+        if is_one_hot:
+            return labels.astype(int)  # Ensure integer type
+
+    # Proceed to encode if not one-hot
+    if num_classes is None:
+        num_classes = np.max(labels) + 1  # Infer from integer labels
+    return np.eye(num_classes, dtype=int)[labels]
 def gradient_check(model, X, Y, loss_fn, epsilon=1e-7, threshold=1e-5):
     """
     Performs gradient checking for a given model.

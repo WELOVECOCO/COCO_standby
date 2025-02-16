@@ -149,3 +149,60 @@ class Tensor:
         out.parents = [self]
         out._grad_fn = SUM_BACKWARD(self, axis, keepdims)
         return out
+
+
+    def reshape(self, *shape):
+        """
+        Reshapes the tensor to a specified shape and records the operation for autograd.
+        """
+        out = Tensor(self.data.reshape(*shape), self.requires_grad)
+        out.parents = [self]
+        out._grad_fn = RESHAPE_BACKWARD(self)
+        return out
+
+    def transpose(self, *axes):
+        """
+        Transposes the tensor and records the operation for autograd.
+        """
+        out = Tensor(self.data.transpose(*axes), self.requires_grad)
+        out.parents = [self]
+        out._grad_fn = TRANSPOSE_BACKWARD(self, axes)
+        return out
+    
+
+    @property
+    def T(self, *axes):
+        """
+        Transposes the tensor and returns the result.
+        """
+        return self.transpose()
+    
+    @property
+    def shape(self):
+        """
+        Returns the shape of the tensor data.
+        """
+        return self.data.shape
+    
+    @property
+    def ndim(self):
+        """
+        Returns the number of dimensions of the tensor data.
+        """
+        return self.data.ndim
+    
+    @property
+    def size(self):
+        """
+        Returns the size of the tensor data.
+        """
+        return self.data.size
+    
+    @property
+    def dtype(self):
+        """
+        Returns the data type of the tensor data.
+        """
+        return self.data.dtype
+    
+    
