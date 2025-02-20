@@ -55,6 +55,10 @@ class Optimizer:
         self.clip_value = clip_value
         self.params = params
 
+
+    def zero_grad(self):
+        for param in self.params:
+            param.zero_grad()
     def step(self):
         """
         Placeholder for the optimizer update logic.
@@ -171,6 +175,7 @@ class adam(Optimizer):
        self.momentum = defaultdict(lambda: None)
        self.Gsquare = defaultdict(lambda: None)
        self.t = 0
+       self.eps = 1e-8
 
     def step(self):
         self.t += 1

@@ -1,44 +1,38 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from core.tensor import Tensor
 
-@staticmethod
-def get_activation(activation_name,dropout=None):
+def get_activation(activation_name, dropout=None):
     """
     Retrieve an activation function instance based on its name.
 
     Args:
         activation_name (str): Name of the activation function.
+        dropout (float, optional): Dropout rate.
 
     Returns:
-        Activation: Instance of the corresponding activation function class.
-
-    Raises:
-        ValueError: If the activation function name is not recognized.
+        An instance of the corresponding activation function.
     """
-    if activation_name is None:
-        return no_activation(dropout)
-    elif activation_name == "relu":
-        return relu(dropout)
-    elif activation_name == "sigmoid":
-        return sigmoid(dropout)
-    elif activation_name == "tanh":
-        return tanh(dropout)
-    elif activation_name == "softmax":
-        return softmax(dropout)
-    elif activation_name == "leaky_relu":
-        return leaky_relu(dropout)
-    elif activation_name == "none" or activation_name == None:
-        return no_activation(dropout)
+    if activation_name is None or activation_name.lower() == "none":
+        return None
+    elif activation_name.lower() == "relu":
+        return Relu(dropout)
+    elif activation_name.lower() == "sigmoid":
+        return Sigmoid(dropout)
+    elif activation_name.lower() == "tanh":
+        return Tanh(dropout)
+    elif activation_name.lower() == "softmax":
+        return Softmax(dropout)
+    elif activation_name.lower() == "leaky_relu":
+        return LeakyReLU(dropout)
     else:
         raise ValueError(f"Unknown activation function: {activation_name}")
-    
+
 
 class Activation:
     """
     Base class for activation functions.
-    """    
-    
+    """
+
     def __init__(self, dropout=None):
         """
         Initialize the activation function with optional dropout.
@@ -47,8 +41,7 @@ class Activation:
             dropout (float, optional): Dropout rate. Defaults to None.
         """
         self.dropout = dropout
-        self.output = None
-        self.test=False
+        self.test = False  # When True, dropout is disabled
 
     def to_train(self):
         self.test = False
@@ -56,198 +49,285 @@ class Activation:
     def to_eval(self):
         self.test = True
 
-    def apply_dropout(self):
+    def apply_dropout(self, input):
         """
-        Apply dropout to the output if dropout is set and not in test mode.
+        Apply dropout to the output tensor if dropout is set and in training mode.
+        This is done by composing the dropout operations as Tensor operations,
+        so that the graph (and thus parents/grad_fn) is maintained.
 
         Args:
-            test (bool): Flag to indicate test mode (dropout is not applied in test mode).
+            tensor (Tensor): The output Tensor of an activation.
+
+        Returns:
+            Tensor: The dropout-modified Tensor.
         """
         if self.dropout is not None and not self.test:
-            self.mask = Tensor((np.random.rand(*self.output.shape) < (1 - self.dropout)).astype(float), requires_grad=False)
-            self.output *= self.mask
-            self.output /= (1 - self.dropout)
+            # Create a dropout mask as a Tensor (no gradient required)
+            self.mask = (np.random.rand(*input.data.shape) < (1 - self.dropout)).astype(np.float32)
+
+            # Multiply by mask and rescale. Note: the returned Tensor is a new node.
+            input = (input * self.mask) / (1 - self.dropout)
+        return input
 
 
-class tanh(Activation):
+class Tanh(Activation):
     """
     Hyperbolic tangent activation function.
     """
+
     def __init__(self, dropout=None):
         super().__init__(dropout)
 
     def __call__(self, x):
-        """
-        Compute the __call__ pass using the tanh function.
-
-        Args:
-            x (ndarray): Input tensor.
-            test (bool, optional): Flag for test mode. Defaults to False.
-
-        Returns:
-            ndarray: Transformed tensor using tanh.
-        """
-        self.output = np.tanh(x)
-        
-        self.apply_dropout()
-        
-        
-        
-        return self.output
+        # If the input is a Tensor (autograd mode)
+        if isinstance(x, Tensor):
+            out_data = np.tanh(x.data)
+            self.predropout = out_data.copy()  # store the pre-dropout values
+            out_tensor = Tensor(out_data, requires_grad=x.requires_grad)
+            out_tensor.parents = [x]
+            out_tensor._grad_fn = self.grad_fn
+            # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
+            if self.dropout is not None:
+                out_tensor = self.apply_dropout(out_tensor)
+            self.output = out_tensor  # store for use in grad_fn
+            return out_tensor
+        else:
+            # Fused mode (x is a numpy array)
+            out_data = np.tanh(x)
+            self.predropout = out_data.copy()
+            # Apply dropout if specified.
+            if self.dropout is not None:
+                out_data = self.apply_dropout(out_data)
+            # In fused mode, we simply return the result.
+            return out_data
+            
+    def grad_fn(self, grad):
+        # Compute derivative of tanh: 1 - tanh(x)^2, using pre-dropout values.
+        dx = (1 - self.predropout ** 2)
+        if self.dropout is not None:
+            # Multiply by the dropout mask and account for scaling.
+            d_dropout = self.mask / (1 - self.dropout)
+            dx *= d_dropout
+        # Propagate the gradient through the graph.
+        self.output.parents[0].assign_grad(dx * grad)
 
     def backward(self, grad):
-        """
-        Compute the backward pass (derivative of tanh).
-
-        Args:
-            grad (ndarray): Gradient flowing from the next layer.
-
-        Returns:
-            ndarray: Gradient after applying the derivative of tanh.
-        """
-        return grad * (1 - self.output ** 2)
+        # Direct backward pass for fused mode.
+        dx = (1 - self.predropout ** 2)
+        if self.dropout is not None:
+            d_dropout = self.mask / (1 - self.dropout)
+            dx *= d_dropout
+        return dx * grad
 
 
-class sigmoid(Activation):
+class Sigmoid(Activation):
     """
     Sigmoid activation function.
     """
+
     def __init__(self, dropout=None):
         super().__init__(dropout)
-    
-    def __call__(self, x, **args):
-        """
-        Compute the __call__ pass using the sigmoid function.
 
-        Args:
-            x (ndarray): Input tensor.
+    def __call__(self, x):
 
-        Returns:
-            ndarray: Transformed tensor in the range (0, 1).
-        """
-        self.output = 1 / (1 + np.exp(-x))
+        if isinstance(x, Tensor):
+            out_data = 1 / (1 + np.exp(-x.data))
+            self.predropout = out_data.copy()  # store the pre-dropout values
+            out_tensor = Tensor(out_data, requires_grad=x.requires_grad)
+            out_tensor.parents = [x]
+            out_tensor._grad_fn = self.grad_fn
+            # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
+            if self.dropout is not None:
+                out_tensor = self.apply_dropout(out_tensor)
+            self.output = out_tensor  # store for use in grad_fn
+            return out_tensor
+        else:
+            # Fused mode (x is a numpy array)
+            out_data = 1 / (1 + np.exp(-x))
+            self.predropout = out_data.copy()
+            # Apply dropout if specified.
+            if self.dropout is not None:
+                out_data = self.apply_dropout(out_data)
+            # In fused mode, we simply return the result.
+            return out_data
+            
+    def grad_fn(self, grad):
+        # Compute derivative of tanh: 1 - tanh(x)^2, using pre-dropout values.
+        dx = self.predropout * (1 - self.predropout)
+        if self.dropout is not None:
+            # Multiply by the dropout mask and account for scaling.
+            d_dropout = self.mask / (1 - self.dropout)
+            dx *= d_dropout
+        # Propagate the gradient through the graph.
+        self.output.parents[0].assign_grad(dx * grad)
 
-        self.apply_dropout()
-        return self.output
-
-    def backward(self, grad, **args):
-        """
-        Compute the backward pass (derivative of sigmoid).
-
-        Args:
-            grad (ndarray): Gradient flowing from the next layer.
-
-        Returns:
-            ndarray: Gradient after applying the derivative of sigmoid.
-        """
-        return grad * (self.output * (1 - self.output))
+    def backward(self, grad):
+        # Direct backward pass for fused mode.
+        #derivative of sigmoid
+        dx = self.predropout * (1 - self.predropout)
+        if self.dropout is not None:
+            d_dropout = self.mask / (1 - self.dropout)
+            dx *= d_dropout
+        return dx * grad
 
 
-class softmax(Activation):
+class Softmax(Activation):
     """
     Softmax activation function.
     """
-    
-    def __init__(self, dropout=None):
-        super().__init__(dropout)    
 
-    def __call__(self, x, **args):
+    def __init__(self, dropout=None):
+        super().__init__(dropout)
+
+    def __call__(self, x):
         """
-        Compute the __call__ pass using the softmax function.
+        Forward pass using softmax along axis 1.
 
         Args:
-            x (ndarray): Input tensor.
+            x (Tensor): Input Tensor.
 
         Returns:
-            ndarray: Transformed tensor where values sum to 1 along the specified axis.
+            Tensor: Output Tensor with softmax applied.
         """
-        exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))  # Numerical stability
-        self.output = exp_x / np.sum(exp_x, axis=1, keepdims=True)
+        # Subtract max for numerical stability
+        max_vals = np.max(x.data, axis=1, keepdims=True)
+        exp_x = np.exp(x.data - max_vals)
+        sum_exp = np.sum(exp_x, axis=1, keepdims=True)
+        out_data = exp_x / sum_exp
+        out_data = self.apply_dropout(out_data) if self.dropout is not None else out_data
 
-        self.apply_dropout()
+        self.output = Tensor(out_data, requires_grad=x.requires_grad)
+        self.output.parents = [x]
+        self.output._grad_fn = self.grad_fn
         return self.output
 
-    def backward(self, grad, **args):
-        """
-        Compute the backward pass for softmax.
-
-        Returns:
-            ndarray: Gradient (placeholder implementation).
-        """
-        return grad
+    def grad_fn(self,grad):
+        self.output.parents[0].assign_grad(grad)
+    def backward(self, grad):
+        return grad  # Simplified; see note above.
 
 
-class relu(Activation):
+class Relu(Activation):
     """
     Rectified Linear Unit (ReLU) activation function.
     """
+
     def __init__(self, dropout=None):
         super().__init__(dropout)
 
-    def __call__(self, x, **args):
+    def __call__(self, x):
         """
-        Compute the __call__ pass using ReLU.
+        Forward pass using ReLU.
 
         Args:
-            x (ndarray): Input tensor.
+            x (Tensor): Input Tensor.
 
         Returns:
-            ndarray: Tensor with negative values replaced by 0.
+            Tensor: Output Tensor with ReLU applied.
         """
-        self.output = np.maximum(0, x)
-        self.apply_dropout()
-        return self.output
+            
+        # If the input is a Tensor (autograd mode)
+        if isinstance(x, Tensor):
+            out_data = np.maximum(0, x.data)
+            self.predropout = out_data.copy()  # store the pre-dropout values
+            out_tensor = Tensor(out_data, requires_grad=x.requires_grad)
+            out_tensor.parents = [x]
+            out_tensor._grad_fn = self.grad_fn
+            # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
+            if self.dropout is not None:
+                out_tensor = self.apply_dropout(out_tensor)
+            self.output = out_tensor  # store for use in grad_fn
+            return out_tensor
+        else:
+            # Fused mode (x is a numpy array)
+            out_data = np.maximum(0, x)
+            self.predropout = out_data.copy()
+            # Apply dropout if specified.
+            if self.dropout is not None:
+                out_data = self.apply_dropout(out_data)
+            # In fused mode, we simply return the result.
+            return out_data
 
-    def backward(self, grad, **args):
-        """
-        Compute the backward pass (derivative of ReLU).
 
-        Args:
-            grad (ndarray): Gradient flowing from the next layer.
+    def grad_fn(self, grad):
+        # Compute derivative of tanh: 1 - tanh(x)^2, using pre-dropout values.
+        dx = np.ones_like(self.predropout)
+        dx[self.predropout <= 0] = 0
+        if self.dropout is not None:
+            # Multiply by the dropout mask and account for scaling.
+            d_dropout = self.mask / (1 - self.dropout)
+            dx *= d_dropout
+        # Propagate the gradient through the graph.
+        self.output.parents[0].assign_grad(dx * grad)
 
-        Returns:
-            ndarray: Gradient after applying the derivative of ReLU.
-        """
-        dx = np.ones_like(self.output)
-        dx[self.output < 0] = 0
-        return grad * dx
+    def backward(self, grad):
+        # Direct backward pass for fused mode.
+        dx = np.ones_like(self.predropout)
+        dx[self.predropout <= 0] = 0
+        if self.dropout is not None:
+            d_dropout = self.mask / (1 - self.dropout)
+            dx *= d_dropout
+        return dx * grad
 
 
-class leaky_relu(Activation):
+class LeakyReLU(Activation):
     """
     Leaky Rectified Linear Unit (Leaky ReLU) activation function.
     """
-    def __init__(self, dropout=None):
+
+    def __init__(self, dropout=None,alpha=0.01):
         super().__init__(dropout)
-    
-    def __call__(self, x, alpha=0.01, **args):
-        """
-        Compute the __call__ pass using Leaky ReLU.
-        """
-        self.output = np.where(x > 0, x, alpha * x)
-        self.apply_dropout()
-        return self.output
+        self.alpha = alpha
 
-    def backward(self, grad, alpha=0.01, **args):
-        """
-        Compute the backward pass (derivative of Leaky ReLU).
-        """
-        dx = np.ones_like(self.output)
-        dx[self.output < 0] = alpha
-        return grad * dx
-
-
-class no_activation(Activation):
-    """
-    No activation (identity function).
-    """
-    def __init__(self, dropout=None):
-        super().__init__(dropout)
-    
     def __call__(self, x):
-        """Returns input as-is."""
-        return x
+        """
+        Forward pass using Leaky ReLU.
+
+        Args:
+            x (Tensor): Input Tensor.
+            alpha (float, optional): Slope for negative values. Defaults to 0.01.
+
+        Returns:
+            Tensor: Output Tensor with Leaky ReLU applied.
+        """
+        if isinstance(x, Tensor):
+            out_data = np.where(x.data > 0, x.data, self.alpha * x.data)
+            self.predropout = out_data.copy()  # store the pre-dropout values
+            out_tensor = Tensor(out_data, requires_grad=x.requires_grad)
+            out_tensor.parents = [x]
+            out_tensor._grad_fn = self.grad_fn
+            # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
+            if self.dropout is not None:
+                out_tensor = self.apply_dropout(out_tensor)
+            self.output = out_tensor  # store for use in grad_fn
+            return out_tensor
+        else:
+            # Fused mode (x is a numpy array)
+            out_data = np.where(x > 0, x, self.alpha * x)
+            self.predropout = out_data.copy()
+            # Apply dropout if specified.
+            if self.dropout is not None:
+                out_data = self.apply_dropout(out_data)
+            # In fused mode, we simply return the result.
+            return out_data
+
+
+    def grad_fn(self, grad):
+        # Compute derivative of tanh: 1 - tanh(x)^2, using pre-dropout values.
+        dx = np.ones_like(self.predropout)
+        dx[self.predropout <= 0] = self.alpha
+        if self.dropout is not None:
+            # Multiply by the dropout mask and account for scaling.
+            d_dropout = self.mask / (1 - self.dropout)
+            dx *= d_dropout
+        # Propagate the gradient through the graph.
+        self.output.parents[0].assign_grad(dx * grad)
 
     def backward(self, grad):
-        """Returns gradient as-is."""
-        return grad
+        # Direct backward pass for fused mode.
+        dx = np.ones_like(self.predropout)
+        dx[self.predropout <= 0] = self.alpha
+        if self.dropout is not None:
+            d_dropout = self.mask / (1 - self.dropout)
+            dx *= d_dropout
+        return dx * grad

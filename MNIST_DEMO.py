@@ -1,8 +1,47 @@
 import tkinter as tk
 import numpy as np
-from core.utils import load_model
+import numpy as np
+from core.Models import Model
+from core.Function import Tanh,Softmax
+from core.nn import Linear, Conv2d, MaxPool2d
+from core.optim import sgd
+from core.loss import get_loss_fn
+class resnet(Model):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = Conv2d(input_channels=1, output_channels=8, kernel_size=3, stride=1, padding=1,initialize_type='xavier')
+        self.relu1 = Tanh()
+        self.conv2 = Conv2d(input_channels=8, output_channels=16, kernel_size=3, stride=1, padding=1,initialize_type='xavier')
+        self.relu2 = Tanh()
+        self.max1 = MaxPool2d(kernel_size=2, stride=2)
+        self.conv3 = Conv2d(input_channels=16, output_channels=32, kernel_size=3, stride=1, padding=1,initialize_type='xavier')
+        self.relu3 = Tanh()
+        self.conv4 = Conv2d(input_channels=32, output_channels=64, kernel_size=3, stride=1, padding=1,initialize_type='xavier')
+        self.relu4 = Tanh()
+        self.max2 = MaxPool2d(kernel_size=2, stride=2)
+        self.linear1 = Linear(64 * 7 * 7, 100, initialize_type='xavier', activation='tanh')
+        self.linear2 = Linear(100,10, initialize_type='xavier')
+        self.softmax = Softmax()
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.relu1(x)
+        x = self.conv2(x)
+        x = self.relu2(x)
+        x = self.max1(x)
+        x = self.conv3(x)
+        x = self.relu3(x)
+        x = self.conv4(x)
+        x = self.relu4(x)
+        x = self.max2(x)
+        x = self.linear1(x)
+        x = self.linear2(x)
+        x = self.softmax(x)
+        return x
+    
 
-model = load_model('model.pkl')  
+loaded_model = resnet() 
+loaded_model.load_model(filepath="model.h5")
+print("Model loaded successfully!")
 """
 
 
@@ -167,7 +206,7 @@ class MNISTGUI:
     def predict(self, event=None):
         # Reshape data to (1, 1, 28, 28)
         input_data = self.data.reshape(1, 1, 28, 28)
-        predictions = model.predict(input_data)[0]
+        predictions = loaded_model(input_data).data[0]
         
         # Update each probability box based on its prediction.
         for digit, prob in enumerate(predictions):

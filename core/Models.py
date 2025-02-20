@@ -72,6 +72,16 @@ class Model:
                     print(prefix + f"  Bias: {layer.bias.shape}")
         print(prefix + "=" * 50)
 
+
+    def view_graph(self, input_data, filename="model_graph", format="png", view=False):
+        """
+        Runs a forward pass using the provided input_data and visualizes the
+        computation graph of the output tensor.
+        """
+        output_tensor = self(Tensor(input_data,requires_grad=True))
+        # Assuming output_tensor is an instance of Tensor and has view_graph
+        output_tensor.view_graph(filename=filename, format=format, view=view)
+
     def save_model(self, filepath):
         """
         Save the model parameters to an .h5 file.

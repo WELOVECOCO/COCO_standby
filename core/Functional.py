@@ -102,3 +102,24 @@ class MeanBackward:
             if not self.keepdims and self.axis is not None:
                 grad_expanded = np.expand_dims(grad, self.axis)
             self.a.assign_grad(np.ones_like(self.a.data) * (grad_expanded / n))
+
+
+class SumBackward:
+    def __init__(self, a, axis, keepdims):
+        self.a = a
+        self.axis = axis
+        self.keepdims = keepdims
+    def __call__(self, grad):
+        if self.a.requires_grad:
+            # The gradient of sum is simply 1/N distributed to every element.
+            # Compute the number of elements reduced.
+            if self.axis is None:
+                n = self.a.data.size
+            else:
+                # When axis is not None, we need to get the size along the reduced axis.
+                n = np.prod(np.array(self.a.data.shape)[self.axis])
+            # Expand grad to the shape of the original data.
+            grad_expanded = grad
+            if not self.keepdims and self.axis is not None:
+                grad_expanded = np.expand_dims(grad, self.axis)
+            self.a.assign_grad(np.ones_like(self.a.data) * (grad_expanded / n))

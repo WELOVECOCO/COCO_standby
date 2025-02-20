@@ -17,9 +17,13 @@ class Layer(Module):
         self.weights=None
         self.bias=None
         self.input=None
+        self.output=None
+        self.name = None
+
 
     def parameters(self):
         return [self.weights,self.bias]
+    
     def __call__(self, input,**kwargs):
         pass
 
@@ -52,13 +56,14 @@ class Linear(Layer):
         
         self.weights, self.bias = self.initialize_weights(input_dim, output_dim, initialize_type)
 
-    def get_parameters(self):
+    def parameters(self):
 
-        return {"weights":self.weights,"bias":self.bias}
+        return [self.weights,self.bias]
     
-    def set_parameters(self,parameters):
-        self.weights = parameters["weights"]
-        self.bias = parameters["bias"]
+
+    def set_parameters(self,weights,bias):
+        self.weights = weights
+        self.bias = bias
     def initialize_weights(self,input_dim, output_dim, initialize_type="xavier"):   
         """
         Initializes weights and biases based on the specified initialization method.
@@ -116,16 +121,16 @@ class Linear(Layer):
             self.input = Tensor(self.input.data.reshape(B, -1))  # Flatten to [B, C*H*W]
             self.input.parents = parents
             self.input._grad_fn = grad_fn
-        elif self.input.data.ndim != 2:  # If input is not 2D or 4D, raise an error
+        elif self.input.ndim != 2:  # If input is not 2D or 4D, raise an error
             raise ValueError(f"Linear layer received input of unsupported shape {self.input.shape}")
         
         out = (self.input.data @ self.weights.data) + self.bias.data  
         if self.activation is not None:
             out = self.activation(out)
-        self.out = Tensor(out, requires_grad=True)    
-        self.out._grad_fn = self.backward 
-        self.out.parents = [self.input] # Set the backward function for autograd
-        return self.out
+        self.output = Tensor(out, requires_grad=True)    
+        self.output._grad_fn = self.backward 
+        self.output.parents = [self.input] # Set the backward function for autograd
+        return self.output
 
     def backward(self, grad):
         """
@@ -141,6 +146,7 @@ class Linear(Layer):
         grad = self.activation.backward(grad) if self.activation is not None else grad
         
         # Gradient of loss w.r.t. weights
+
         self.weights.grad = self.input.data.T @ grad
 
         # Gradient of loss w.r.t. bias
@@ -181,9 +187,9 @@ class Conv2d(Layer):
         self.weights, self.bias = self.initialize_weights(initialize_type)
 
 
-    def get_parameters(self):
+    def parameters(self):
 
-        return {"weights":self.weights,"bias":self.bias}
+        return [self.weights,self.bias]
     def initialize_weights(self, initialize_type="xavier"):
         """
         Initializes weights and biases for the Conv2D layer.
@@ -228,9 +234,9 @@ class Conv2d(Layer):
         Returns:
             np.ndarray: Output tensor after convolution.
         """
-        if input.data.ndim != 4:
+        if input.ndim != 4:
             raise ValueError(f"Expected 4D input (batch_size, channels, height, width), got shape {input.data.shape}")
-        if input.data.shape[1] != self.input_channels:
+        if input.shape[1] != self.input_channels:
             raise ValueError(f"Expected {self.input_channels} input channels, got {input.data.shape[1]}")
 
         self.input = input
@@ -288,7 +294,7 @@ class Conv2d(Layer):
         else:
             dInput = dInput_padded
 
-        self.input.assign_grad(dInput)
+        self.input.assign_grad(dInput) 
         
         # assert dInput.shape == self.input.shape
         
@@ -367,6 +373,8 @@ class MaxPool2d(Module):
         Returns:
             np.ndarray: Gradient of the loss with respect to the input.
         """
+        # print(grad_output)
+        
         X = self.cache['input'].data
         max_indices, window_shape, strides = self.cache['max_indices']
         grad_output = grad_output.reshape(*self.cache['out_shape'])
@@ -404,6 +412,7 @@ class MaxPool2d(Module):
         valid_grad = grad_output[valid]
 
         # Accumulate gradients using vectorized scatter-add
+        # print(type(valid_grad))
         grad_input = np.zeros_like(X)
         np.add.at(grad_input, (valid_b, valid_c, valid_h, valid_w), valid_grad)
         self.input.assign_grad(grad_input)

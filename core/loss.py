@@ -4,116 +4,117 @@ from core.tensor import Tensor
 # Global constant for numerical stability in logarithms.
 EPSILON = 1e-12
 
+class binary_cross_entropy:
+    def __init__(self):
+        self.y_true = None
+        self.y_pred = None
+        self.loss = None
+    def binary_cross_entropy(self,y_true, y_pred):
+        if not isinstance(y_true, np.ndarray):
+            try:
+                y_true = y_true.toarray()
+            except AttributeError:
+                raise ValueError("y_true must be a numpy array or have a 'toarray' method.")
 
-def binary_cross_entropy(y_true, y_pred):
-    """
-    Compute the binary cross entropy loss and its gradient.
+        if not isinstance(y_true, Tensor):
+            y_true = Tensor(y_true, requires_grad=False)
 
-    Assumes:
-        - y_true is an array of shape (B, 1), where B is the batch size.
-        - y_pred is an array of shape (B, 1) containing predicted probabilities,
-          with values in (0, 1).
+        # Compute loss per sample
+        self.y_true = y_true
+        self.y_pred = y_pred
+        y_pred_clipped = y_pred.clip(EPSILON, 1 - EPSILON)
+        per_sample_loss = -(y_true * y_pred_clipped.log() + (1 - y_true) * (1 - y_pred_clipped).log())
 
-    Parameters
-    ----------
-    y_true : numpy.ndarray
-        Ground truth labels.
-    y_pred : numpy.ndarray
-        Predicted probabilities.
-
-    Returns
-    -------
-    loss : numpy.ndarray
-        The average binary cross entropy loss (averaged over the batch).
-    grad : numpy.ndarray
-        The gradient of the loss with respect to y_pred.
-
-    Notes
-    -----
-    A small constant EPSILON is added to y_pred (and 1 - y_pred) to avoid log(0) issues.
-    """
-    # Convert y_true to a Tensor (no gradient needed)
-    if not isinstance(y_true, Tensor):
-        y_true = Tensor(y_true, requires_grad=False)
-    # Use Tensor operations to build the computation graph.
-    y_pred_clipped = y_pred.clip(EPSILON, 1 - EPSILON)
-    loss = -(y_true * y_pred_clipped.log() + (Tensor(1.0, requires_grad=False) - y_true) *
-             (Tensor(1.0, requires_grad=False) - y_pred_clipped).log()).mean()
-    return loss
+        loss = per_sample_loss.mean()
+        loss.parents = [y_pred]
+        loss._grad_fn = self.grad_fn
+        self.loss = loss
 
 
-def sparse_categorical_cross_entropy(y_true, y_pred, axis=1):
-    """
-    Compute the sparse categorical cross entropy loss and its gradient.
+       
+        return loss
+    
 
-    This function converts a sparse matrix (if applicable) to dense format before
-    calculating the loss.
-
-    Assumes:
-        - y_true is either a dense numpy array or a sparse matrix (with a .toarray() method)
-          of shape (B, num_classes), where B is the batch size.
-        - y_pred is a numpy array of shape (B, num_classes) containing probability
-          distributions along the specified axis.
-
-    Parameters
-    ----------
-    y_true : numpy.ndarray or sparse matrix
-        Ground truth labels. If not a numpy array, it is converted using .toarray().
-    y_pred : numpy.ndarray
-        Predicted probability distributions.
-    axis : int, optional
-        The axis along which the classes are defined (default is 1).
-
-    Returns
-    -------
-    loss : numpy.ndarray
-        The average sparse categorical cross entropy loss.
-    grad : numpy.ndarray
-        The gradient of the loss with respect to y_pred.
-
-    Notes
-    -----
-    A small constant EPSILON is added to y_pred before taking the logarithm to avoid log(0).
-    """
-    # Convert sparse matrix to dense if needed.
-    if not isinstance(y_true, np.ndarray):
-        try:
-            y_true = y_true.toarray()
-        except AttributeError:
-            raise ValueError("y_true must be a numpy array or have a 'toarray' method.")
-    if not isinstance(y_true, Tensor):
-        y_true = Tensor(y_true, requires_grad=False)
-    # Build the loss using Tensor operations.
-    loss = -(y_true * (y_pred + EPSILON).log()).sum(axis=axis).mean()
-    return loss
+    def grad_fn(self,grad):
+        batch_size = self.y_pred.shape[0]
+        self.loss.parents[0].assign_grad(grad * (self.y_pred.data - self.y_true.data) / batch_size)
+        # print(self.loss.parents[0].grad)
 
 
-def mean_squared_error(y_true, y_pred):
-    """
-    Compute the mean squared error (MSE) loss and its gradient.
+class sparse_categorical_cross_entropy: #       
+    def __init__(self):
+        self.y_true = None
+        self.y_pred = None
+        self.loss = None
 
-    Parameters
-    ----------
-    y_true : numpy.ndarray
-        Ground truth values.
-    y_pred : numpy.ndarray
-        Predicted values.
+    
+    def sparse_categorical_cross_entropy(self,y_true, y_pred, axis=1):
+        if not isinstance(y_true, np.ndarray):
+            try:
+                y_true = y_true.toarray()
+            except AttributeError:
+                raise ValueError("y_true must be a numpy array or have a 'toarray' method.")
 
-    Returns
-    -------
-    loss : numpy.ndarray
-        The average mean squared error loss.
-    grad : numpy.ndarray
-        The gradient of the MSE loss with respect to y_pred.
+        if not isinstance(y_true, Tensor):
+            y_true = Tensor(y_true, requires_grad=False)
 
-    Notes
-    -----
-    The gradient here is computed as 2*(y_pred - y_true)/B, where B is the batch size.
-    """
-    if not isinstance(y_true, Tensor):
-        y_true = Tensor(y_true, requires_grad=False)
-    loss = ((y_true - y_pred) ** 2).mean()
-    return loss
+        # Compute loss per sample
+        self.y_true = y_true
+        self.y_pred = y_pred
+        per_sample_loss = -(y_true * (y_pred + EPSILON).log()).sum(axis=axis)
+
+        loss = per_sample_loss.mean()
+        loss.parents = [y_pred]
+        loss._grad_fn = self.grad_fn
+        self.loss = loss
+
+
+       
+        return loss
+    
+
+    def grad_fn(self,grad):
+        batch_size = self.y_pred.shape[0]
+        self.loss.parents[0].assign_grad(grad * (self.y_pred.data - self.y_true.data) / batch_size)
+        # print(self.loss.parents[0].grad)
+
+#    
+class mean_squared_error:
+
+    def __init__(self):
+        self.y_true = None
+        self.y_pred = None
+        self.loss = None
+    def mean_squared_error(self,y_true, y_pred):
+        if not isinstance(y_true, np.ndarray):
+            try:
+                y_true = y_true.toarray()
+            except AttributeError:
+                raise ValueError("y_true must be a numpy array or have a 'toarray' method.")
+
+        if not isinstance(y_true, Tensor):
+            y_true = Tensor(y_true, requires_grad=False)
+
+        # Compute loss per sample
+        self.y_true = y_true
+        self.y_pred = y_pred
+        per_sample_loss = (y_true - y_pred) ** 2
+
+        loss = per_sample_loss.mean()
+        loss.parents = [y_pred]
+        loss._grad_fn = self.grad_fn
+        self.loss = loss
+
+
+    
+        return loss
+    
+
+    def grad_fn(self,grad):
+        batch_size = self.y_pred.shape[0]
+        dz = 2 * (self.y_pred.data - self.y_true.data)
+        self.loss.parents[0].assign_grad(grad * dz / batch_size)
+
 
 
 def get_loss_fn(loss_fn_name):
@@ -139,27 +140,11 @@ def get_loss_fn(loss_fn_name):
         If the loss function name is not recognized.
     """
     if loss_fn_name == 'bce':
-        return binary_cross_entropy
+        return binary_cross_entropy()
     elif loss_fn_name == 'categorical_bce':
-        return sparse_categorical_cross_entropy
+        return sparse_categorical_cross_entropy()
     elif loss_fn_name == 'mse':
-        return mean_squared_error
+        return mean_squared_error()
     else:
         raise ValueError("Unknown loss function: " + loss_fn_name)
 
-
-def loss_wrapper(loss_fn, y_true, y_pred):
-    """
-    Wrap a loss function so that it returns a Tensor with a custom backward function.
-
-    Parameters:
-      loss_fn: a function that takes (y_true, y_pred_data) and returns (loss_value, grad)
-      y_true: the ground-truth labels (numpy array)
-      y_pred: the prediction Tensor (our custom Tensor) from the network.
-
-    Returns:
-      A Tensor that holds the loss value and whose backward function propagates the loss gradient to y_pred.
-    """
-    # Compute the loss using the provided loss function, which now returns a Tensor.
-    loss_tensor = loss_fn(y_true, y_pred)
-    return loss_tensor

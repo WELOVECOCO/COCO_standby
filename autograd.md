@@ -14,10 +14,10 @@ what we have now :
             - the forward function returns a tensor whos _grad_fn is the layer backward function
             - the backward function does not return anything now in _grad_fn (called by the output tensor of the layer) we just update (self.weight.grad-self.bias.grad-self.input.grad)
         -fuse layers with activation functions to reduce number of nodes in a computational graph
-
-    
-what we need :
     -projection in residual connections y = F(x) + x  when x and F(x) are not the same size (we perform a 1x1 convolution)
     - more elementry operations on the tensor (reshaping - transpose - alot more)
     -adapt the optimizers (they take a list containing all the weights of the network and they loop on it and update it)
     -also optimizer has a state dict containing the momentum and acc_grad_square values for each single weight and bias
+
+    
+what we need :

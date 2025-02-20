@@ -1,7 +1,7 @@
 import numpy as np
-from core.functional import (AddBackward, MulBackward, DivBackward, PowBackward,
+from core.Functional import (AddBackward, MulBackward, DivBackward, PowBackward,
                              NegBackward, ReshapeBackward, TransposeBackward, MatMulBackward,
-                             LogBackward, MeanBackward)
+                             LogBackward, MeanBackward,SumBackward)
 
 class Tensor:
     def __init__(self, data, requires_grad=True):
@@ -53,14 +53,16 @@ class Tensor:
 
         if grad is None:
             # if scalar loss, the default grad is 1.
-            grad = np.ones_like(self.data)
+            grad = np.ones_like(self.parents[0].data)
         self.assign_grad(grad)
-
         # Get nodes in topological order so that we call each node’s backward function only after its dependents.
         topo_order = self._topological_sort()
         for node in topo_order:
             if node._grad_fn is not None:
+                # print("function now :",node._grad_fn)
                 node._grad_fn(node.grad)
+                # print("grad:",node.grad)
+
         if not retain_graph:
             for node in topo_order:
                 node._grad_fn = None
@@ -170,6 +172,69 @@ class Tensor:
         if out.requires_grad:
             out._grad_fn = MeanBackward(self, axis, keepdims)
         return out
+
+
+    def sum(self, axis=None, keepdims=False):
+        """Compute the sum and record the backward operation."""
+        out = Tensor(np.sum(self.data, axis=axis, keepdims=keepdims), self.requires_grad)
+        out.parents = [self]
+        if out.requires_grad:
+            out._grad_fn = SumBackward(self, axis, keepdims)
+        return out
+    
+
+    def view_graph(self, filename="computational_graph", format="png", view=False):
+       
+        from graphviz import Digraph
+        dot = Digraph(format=format, graph_attr={'rankdir': 'LR'})
+        visited = set()
+
+        def add_tensor(tensor):
+            tensor_id = f"tensor_{id(tensor)}"
+            if tensor_id in visited:
+                return
+            visited.add(tensor_id)
+            # Create label for the tensor node.
+            label = "Tensor"
+            if hasattr(tensor, "name"):
+                label = f"{tensor.name}\n{label}"
+            label += f"\nshape: {tensor.data.shape}\nrequires_grad: {tensor.requires_grad}"
+            dot.node(tensor_id, label, shape="oval")
+
+            # If this tensor was produced by an operation (_grad_fn), create a separate function node.
+            if tensor._grad_fn is not None:
+                func_id = f"func_{id(tensor._grad_fn)}"
+                # Determine the function node label.
+                if hasattr(tensor._grad_fn, 'layer_type'):
+                    fn_name = f"{tensor._grad_fn.layer_type}.backward"
+                elif hasattr(tensor._grad_fn, '__self__'):
+                    # It's a bound method. Use the type name of its owner (the layer).
+                    fn_name = type(tensor._grad_fn.__self__).__name__.lower() + ".backward"
+                else:
+                    grad_fn_class = type(tensor._grad_fn).__name__
+                    if grad_fn_class.endswith("Backward"):
+                        fn_name = grad_fn_class[:-len("Backward")].lower() + ".backward"
+                    else:
+                        fn_name = grad_fn_class
+                dot.node(func_id, fn_name, shape="box", style="filled", fillcolor="lightblue")
+                # Connect the function node to the current tensor node.
+                dot.edge(func_id, tensor_id)
+                # Recursively add all parent tensors and connect them to the function node.
+                for parent in tensor.parents:
+                    add_tensor(parent)
+                    parent_id = f"tensor_{id(parent)}"
+                    dot.edge(parent_id, func_id)
+            else:
+                # For tensors without an associated _grad_fn (like inputs), simply add their parent's edges.
+                for parent in tensor.parents:
+                    add_tensor(parent)
+                    parent_id = f"tensor_{id(parent)}"
+                    dot.edge(parent_id, tensor_id)
+
+        add_tensor(self)
+        dot.render(filename, view=view)
+        return dot
+
 
     # === Other Utilities ===
 
