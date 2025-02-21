@@ -5,6 +5,7 @@ __pycache__/
 mainTests.py
 data/
 testt.py
+tests.py
 mnist_coco.pkl
 .idea/COCO_standby.iml
 .idea/inspectionProfiles/profiles_settings.xml
