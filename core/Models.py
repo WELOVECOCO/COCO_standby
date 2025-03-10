@@ -37,13 +37,20 @@ class Model:
             # You can add additional cases if other types hold parameters.
         return params
 
-    def forward(self, x):
+
+    def test(self):
+        for layer in self.layers.values():
+            if isinstance(layer, Model):
+                layer.test()
+            elif isinstance(layer, Layer) or isinstance(layer, Activation):
+                layer.test()
+    def forward(self, x, test=False):
         """
         Users must override this method to define the forward pass.
         """
         raise NotImplementedError("Forward method must be implemented in subclasses")
 
-    def __call__(self, x):
+    def __call__(self, x, test=False):
         """
         ARGS: 
             x (ndarray): Input data (e.g., image: [B, C, H, W] or feature vector: [B, D])
@@ -142,3 +149,47 @@ class Model:
                     layer.weights.data = group[f'{name}/weights'][:]
                 if hasattr(layer, 'bias') and group.get(f'{name}/bias'):
                     layer.bias.data = group[f'{name}/bias'][:]
+    def load_weights_by_structure(self, state_dict, strict=True):
+        """
+        Load pre-trained weights into the model based on parameter order and shape, ignoring names.
+
+        Args:
+            state_dict (dict): Dictionary of pre-trained weights (keys are names, values are numpy arrays).
+            strict (bool): If True, raises an error if shapes don’t match or there are unused weights.
+                        If False, skips mismatches silently.
+
+        Returns:
+            None
+        """
+        # Get the model's parameters in order
+        model_params = self.parameters()  # Assumes parameters() returns a list of Tensors
+
+        # Flatten the state_dict values into a list (ignore keys)
+        pretrained_weights = list(state_dict.values())
+
+        if len(pretrained_weights) != len(model_params):
+            warning = (f"Number of pre-trained weights ({len(pretrained_weights)}) does not match "
+                    f"number of model parameters ({len(model_params)})")
+            if strict:
+                raise ValueError(warning)
+            else:
+                print(f"Warning: {warning}")
+
+        # Assign weights based on order and check shapes
+        for i, (param, weight) in enumerate(zip(model_params, pretrained_weights)):
+            weight = np.array(weight)
+            if weight.ndim == 2:
+                weight = weight.T
+            if param.data.shape != weight.shape:
+                error_msg = (f"Shape mismatch at parameter {i}: "
+                            f"model expects {param.data.shape}, "
+                            f"pre-trained weight has {weight.shape}")
+                if strict:
+                    raise ValueError(error_msg)
+                else:
+                    print(f"Warning: {error_msg}")
+                    continue
+            param.data = weight
+
+        if not strict and len(pretrained_weights) > len(model_params):
+            print(f"Warning: {len(pretrained_weights) - len(model_params)} pre-trained weights were unused")

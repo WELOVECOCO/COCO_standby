@@ -41,13 +41,10 @@ class Activation:
             dropout (float, optional): Dropout rate. Defaults to None.
         """
         self.dropout = dropout
-        self.test = False  # When True, dropout is disabled
+        self.testt = False  # When True, dropout is disabled
 
-    def to_train(self):
-        self.test = False
-
-    def to_eval(self):
-        self.test = True
+    def test(self):
+        self.testt = True
 
     def apply_dropout(self, input):
         """
@@ -78,7 +75,7 @@ class Tanh(Activation):
     def __init__(self, dropout=None):
         super().__init__(dropout)
 
-    def __call__(self, x):
+    def __call__(self, x, **kwargs):
         # If the input is a Tensor (autograd mode)
         if isinstance(x, Tensor):
             out_data = np.tanh(x.data)
@@ -87,8 +84,9 @@ class Tanh(Activation):
             out_tensor.parents = [x]
             out_tensor._grad_fn = self.grad_fn
             # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
-            if self.dropout is not None:
-                out_tensor = self.apply_dropout(out_tensor)
+            if self.testt is False:
+                if self.dropout is not None:
+                    out_tensor = self.apply_dropout(out_tensor)
             self.output = out_tensor  # store for use in grad_fn
             return out_tensor
         else:
@@ -96,8 +94,9 @@ class Tanh(Activation):
             out_data = np.tanh(x)
             self.predropout = out_data.copy()
             # Apply dropout if specified.
-            if self.dropout is not None:
-                out_data = self.apply_dropout(out_data)
+            if self.testt is False:
+                if self.dropout is not None:
+                    out_tensor = self.apply_dropout(out_tensor)
             # In fused mode, we simply return the result.
             return out_data
             
@@ -128,7 +127,7 @@ class Sigmoid(Activation):
     def __init__(self, dropout=None):
         super().__init__(dropout)
 
-    def __call__(self, x):
+    def __call__(self, x, **kwargs):
 
         if isinstance(x, Tensor):
             out_data = 1 / (1 + np.exp(-x.data))
@@ -137,8 +136,9 @@ class Sigmoid(Activation):
             out_tensor.parents = [x]
             out_tensor._grad_fn = self.grad_fn
             # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
-            if self.dropout is not None:
-                out_tensor = self.apply_dropout(out_tensor)
+            if self.testt is False:
+                if self.dropout is not None:
+                    out_tensor = self.apply_dropout(out_tensor)
             self.output = out_tensor  # store for use in grad_fn
             return out_tensor
         else:
@@ -146,8 +146,9 @@ class Sigmoid(Activation):
             out_data = 1 / (1 + np.exp(-x))
             self.predropout = out_data.copy()
             # Apply dropout if specified.
-            if self.dropout is not None:
-                out_data = self.apply_dropout(out_data)
+            if self.testt is False:
+                if self.dropout is not None:
+                    out_tensor = self.apply_dropout(out_tensor)
             # In fused mode, we simply return the result.
             return out_data
             
@@ -179,7 +180,7 @@ class Softmax(Activation):
     def __init__(self, dropout=None):
         super().__init__(dropout)
 
-    def __call__(self, x):
+    def __call__(self, x, **kwargs):
         """
         Forward pass using softmax along axis 1.
 
@@ -194,7 +195,9 @@ class Softmax(Activation):
         exp_x = np.exp(x.data - max_vals)
         sum_exp = np.sum(exp_x, axis=1, keepdims=True)
         out_data = exp_x / sum_exp
-        out_data = self.apply_dropout(out_data) if self.dropout is not None else out_data
+        if self.testt is False:
+            if self.dropout is not None:
+                out_data = self.apply_dropout(out_data)
 
         self.output = Tensor(out_data, requires_grad=x.requires_grad)
         self.output.parents = [x]
@@ -215,7 +218,7 @@ class Relu(Activation):
     def __init__(self, dropout=None):
         super().__init__(dropout)
 
-    def __call__(self, x):
+    def __call__(self, x, **kwargs):
         """
         Forward pass using ReLU.
 
@@ -234,8 +237,9 @@ class Relu(Activation):
             out_tensor.parents = [x]
             out_tensor._grad_fn = self.grad_fn
             # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
-            if self.dropout is not None:
-                out_tensor = self.apply_dropout(out_tensor)
+            if self.testt is False:
+                if self.dropout is not None:
+                    out_tensor = self.apply_dropout(out_tensor)
             self.output = out_tensor  # store for use in grad_fn
             return out_tensor
         else:
@@ -243,8 +247,9 @@ class Relu(Activation):
             out_data = np.maximum(0, x)
             self.predropout = out_data.copy()
             # Apply dropout if specified.
-            if self.dropout is not None:
-                out_data = self.apply_dropout(out_data)
+            if self.testt is False:
+                if self.dropout is not None:
+                    out_tensor = self.apply_dropout(out_tensor)
             # In fused mode, we simply return the result.
             return out_data
 
@@ -279,7 +284,7 @@ class LeakyReLU(Activation):
         super().__init__(dropout)
         self.alpha = alpha
 
-    def __call__(self, x):
+    def __call__(self, x, **kwargs):
         """
         Forward pass using Leaky ReLU.
 
@@ -297,8 +302,9 @@ class LeakyReLU(Activation):
             out_tensor.parents = [x]
             out_tensor._grad_fn = self.grad_fn
             # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
-            if self.dropout is not None:
-                out_tensor = self.apply_dropout(out_tensor)
+            if self.testt is False:
+                if self.dropout is not None:
+                    out_tensor = self.apply_dropout(out_tensor)
             self.output = out_tensor  # store for use in grad_fn
             return out_tensor
         else:
@@ -306,8 +312,9 @@ class LeakyReLU(Activation):
             out_data = np.where(x > 0, x, self.alpha * x)
             self.predropout = out_data.copy()
             # Apply dropout if specified.
-            if self.dropout is not None:
-                out_data = self.apply_dropout(out_data)
+            if self.testt is False:
+                if self.dropout is not None:
+                    out_tensor = self.apply_dropout(out_tensor)
             # In fused mode, we simply return the result.
             return out_data
 

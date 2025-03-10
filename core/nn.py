@@ -19,8 +19,11 @@ class Layer(Module):
         self.input=None
         self.output=None
         self.name = None
+        self.testt = False
 
 
+    def test(self):
+        self.testt = True    
     def parameters(self):
         return [self.weights,self.bias]
     
@@ -75,13 +78,13 @@ class Linear(Layer):
         Returns:
             tuple: Initialized weight matrix and bias vector.
         """
-
-
+        
+        
         if initialize_type == 'zero':
             w = np.zeros((input_dim, output_dim))
 
         elif initialize_type == 'random':
-            w = np.random.randn(input_dim, output_dim) * 0.01
+            w = np.random.randn((input_dim, output_dim)) * 0.01
 
         elif initialize_type == 'xavier':  # Also known as Glorot
             fan_in, fan_out = input_dim, output_dim
@@ -99,7 +102,7 @@ class Linear(Layer):
         else:
             raise ValueError(f"Unknown initialization method: {initialize_type}")
 
-        b = np.zeros((1, output_dim))  # Bias is always initialized to zeros
+        b = np.zeros((output_dim))  # Bias is always initialized to zeros
         return Tensor(w, requires_grad=True), Tensor(b, requires_grad=True)  # Return Tensor objects for weights and biases
 
     def __call__(self, input,**kwargs):
@@ -150,7 +153,7 @@ class Linear(Layer):
         self.weights.grad = self.input.data.T @ grad
 
         # Gradient of loss w.r.t. bias
-        self.bias.grad = np.sum(grad, axis=0, keepdims=True)
+        self.bias.grad = np.sum(grad, axis=0, keepdims=False)
         
         # Gradient of loss w.r.t. input
         self.input.assign_grad(grad @ self.weights.data.T)
@@ -217,7 +220,7 @@ class Conv2d(Layer):
             raise ValueError(f"Unknown initialization method: {initialize_type}")
 
         # Bias is usually initialized to zero
-        b = np.zeros((1, self.output_channels, 1, 1))
+        b = np.zeros((self.output_channels))
 
 
 
@@ -239,9 +242,13 @@ class Conv2d(Layer):
         if input.shape[1] != self.input_channels:
             raise ValueError(f"Expected {self.input_channels} input channels, got {input.data.shape[1]}")
 
+        # print(type(input))
+        # print(type(self.weights.data))
         self.input = input
         output, self.col_matrix = self.convolver.convolve(self.input.data, self.weights.data, stride=self.stride, padding=self.padding)
-        output = output + self.bias.data
+        bias_reshaped = self.bias.data.reshape(1, self.output_channels, 1, 1)
+        output = output + bias_reshaped
+        # output = output + self.bias.data
         if self.activation is not None:
             output = self.activation(output)
         self.output = Tensor(output,requires_grad=True)
@@ -250,12 +257,12 @@ class Conv2d(Layer):
 
         return self.output
 
-    def backward(self, output_grad):
+    def backward(self, grad):
         """
         Computes the backward pass of the convolution operation.
         
         Args:
-            output_grad (np.ndarray): Gradient of the loss with respect to the output tensor.
+            grad (np.ndarray): Gradient of the loss with respect to the output tensor.
         
         Returns:
             np.ndarray: Gradient of the loss with respect to the input tensor.
@@ -263,19 +270,21 @@ class Conv2d(Layer):
         B, F, H_out, W_out = self.output.data.shape
         
         # Gradient wrt biases
-        # output_grad = output_grad.reshape(self.output.shape)
-        self.bias.grad = np.sum(output_grad, axis=(0, 2, 3), keepdims=True)
+        # grad = grad.reshape(self.output.shape)
+        dbias = np.sum(grad, axis=(0, 2, 3), keepdims=False)
+        self.bias.assign_grad(dbias)
         # assert self.bias.grad.shape == self.bias.shape
         
         # Gradient wrt weights
-        grad_reshaped = output_grad.transpose(1, 0, 2, 3).reshape(self.output_channels, -1)  # Shape: (F, B * H_out * W_out)
+        grad_reshaped = grad.transpose(1, 0, 2, 3).reshape(self.output_channels, -1)  # Shape: (F, B * H_out * W_out)
         grad_kernel_matrix = grad_reshaped @ self.col_matrix  # Use cached `col_matrix`
-        self.weights.grad = grad_kernel_matrix.reshape(self.output_channels, self.input_channels, self.kernel_size, self.kernel_size)
+        dkernel = grad_kernel_matrix.reshape(self.output_channels, self.input_channels, self.kernel_size, self.kernel_size)
+        self.weights.assign_grad(dkernel)
         # assert self.grad_w.shape == self.weights.shape
         
         # Gradient wrt input
         kernel_matrix = self.weights.data.reshape(self.output_channels, -1).T  # Shape: (C*k*k, F)
-        dout_matrix = output_grad.transpose(0, 2, 3, 1).reshape(B * H_out * W_out, F)
+        dout_matrix = grad.transpose(0, 2, 3, 1).reshape(B * H_out * W_out, F)
         dX_col = dout_matrix @ kernel_matrix.T
 
         # Use col2im_accumulation to fold dX_col back to the padded input shape.
@@ -416,132 +425,99 @@ class MaxPool2d(Module):
         grad_input = np.zeros_like(X)
         np.add.at(grad_input, (valid_b, valid_c, valid_h, valid_w), valid_grad)
         self.input.assign_grad(grad_input)
-        
-
-
-class batchnorm1d(Layer):
-    """
-    Implements Batch Normalization for 1D input.
-    This layer normalizes the input batch-wise, stabilizing the training and improving convergence speed.
-    
-    Attributes:
-        eps (float): Small constant for numerical stability.
-        betanorm (float): Momentum factor for moving averages.
-        input_normalized (np.ndarray or None): Stores the normalized input.
-        input (np.ndarray or None): Stores the original input for backward pass.
-        mean (np.ndarray or None): Stores the mean of the batch.
-        var (np.ndarray or None): Stores the variance of the batch.
-        running_mean (np.ndarray): Running mean used during inference.
-        running_variance (np.ndarray): Running variance used during inference.
-        weights (np.ndarray): Scaling factor (gamma).
-        bias (np.ndarray): Shift factor (beta).
-        momentum_w (np.ndarray): Momentum storage for weight updates.
-        momentum_b (np.ndarray): Momentum storage for bias updates.
-        Accumelated_Gsquare_w (np.ndarray): Storage for squared weight gradients.
-        Accumelated_Gsquare_b (np.ndarray): Storage for squared bias gradients.
-    """
-    def __init__(self, dim, activation="none", initialize_type="zero", dropout=None):
-        """
-        Initializes the BatchNorm1D layer.
-        
-        Args:
-            dim (int): Number of input features.
-            activation (str, optional): Activation type (default is "none").
-            initialize_type (str, optional): Initialization method (default is "zero").
-            dropout (float, optional): Dropout rate (not used in batch norm).
-        """
+             
+# the input is the output of the conv2d layer which will be [B,C,H,W]
+# the output will be [B,C,H,W]
+# each filter will have its own mean and variance and beta and gamma
+class batchnorm2d(Layer):
+    def __init__(self,channels,betanorm=0.9):  
         super().__init__()
-        self.eps = 1e-5
-        self.input_normalized = None
-        self.input = None
-        self.betanorm = 0.9
+        self.eps = 1e-8
         self.mean = None
         self.var = None
-        self.initialize_weights(dim, initialize_type)
+        self.running_mean = None
+        self.running_variance = None
+        self.weights = None
+        self.bias = None
+        self.input = None
+        self.output = None
+        self.input_normalized = None
+        self.betanorm = betanorm
+        self.initialize_weights(channels)
+    def initialize_weights(self, channels):
+        running_mean = np.zeros((1, channels, 1, 1))
+        running_variance = np.ones((1, channels, 1, 1))
+        weights = np.ones((1, channels, 1, 1))  # Gamma initialized to 1
+        bias = np.zeros((1, channels, 1, 1))  # Beta initialized to 0
+        self.running_mean = Tensor(running_mean, requires_grad=False)
+        self.running_variance = Tensor(running_variance, requires_grad=False)
+        self.weights = Tensor(weights, requires_grad=True)
+        self.bias = Tensor(bias, requires_grad=True)
 
-    def initialize_weights(self, dims, initialize_type):
-        """
-        Initializes weights and bias parameters.
-        
-        Args:
-            dims (int): Number of input features.
-            initialize_type (str): Type of initialization (not used for batch norm).
-        """
-        self.running_mean = np.zeros((1, dims))
-        self.running_variance = np.ones((1, dims))
-        self.weights = np.ones((1, dims))  # Gamma initialized to 1
-        self.bias = np.zeros((1, dims))  # Beta initialized to 0
-        self.momentum_w = np.zeros((1, dims))
-        self.momentum_b = np.zeros((1, dims))
-        self.Accumelated_Gsquare_w = np.zeros((1, dims))
-        self.Accumelated_Gsquare_b = np.zeros((1, dims))
-        
 
-    def __call__(self, input,test=False,**kwargs):
-        """
-        Forward pass of batch normalization.
-        
-        Args:
-            input (np.ndarray): Input tensor of shape (batch_size, features).
-            test (bool, optional): If True, uses running statistics for inference.
+    def parameters(self):
+        return [self.weights,self.bias]
+    
+    def __call__(self, input, **kwargs):
 
-        Returns:
-            np.ndarray: Normalized and scaled output tensor.
-        """
-        self.input = input
-        if not test:
-            self.mean = np.mean(self.input, axis=0, keepdims=True)
-            self.var = np.var(self.input, axis=0, keepdims=True)
-            
-            # Update running statistics using exponential moving average
-            self.running_variance = (self.betanorm * self.running_variance) + ((1 - self.betanorm) * self.var)
-            self.running_mean = (self.betanorm * self.running_mean) + ((1 - self.betanorm) * self.mean)
-            
-            # Normalize input
-            self.input_normalized = (self.input - self.mean) / np.sqrt(self.var + self.eps)
-            
-            # Apply scale and shift
-            self.out = self.weights * self.input_normalized + self.bias
+        if self.testt==False:
+            self.input = input
+            self.mean = np.mean(self.input.data, axis=(0, 2, 3), keepdims=True)
+            self.var = np.var(self.input.data, axis=(0, 2, 3), keepdims=True)
+            self.running_mean.data = (self.betanorm * self.running_mean.data) + ((1 - self.betanorm) * self.mean)
+            self.running_variance.data = (self.betanorm * self.running_variance.data) + ((1 - self.betanorm) * self.var)
+            self.input_normalized = (self.input.data - self.mean) / np.sqrt(self.var + self.eps)
+            output = self.weights.data * self.input_normalized + self.bias.data
+            self.output = Tensor(output, requires_grad=True)
+            self.output._grad_fn = self.backward
+            self.output.parents = [self.input]
+            return self.output
         else:
-            # Use precomputed running statistics during inference
-            self.input_normalized = (self.input - self.running_mean) / np.sqrt(self.running_variance + self.eps)
-            self.out = self.weights * self.input_normalized + self.bias
-        
-        return self.out
+            self.input = input
+            self.mean = self.running_mean.data
+            self.var = self.running_variance.data
+            self.input_normalized = (self.input.data - self.mean) / np.sqrt(self.var + self.eps)
+            output = self.weights.data * self.input_normalized + self.bias.data
+            self.output = Tensor(output, requires_grad=False)
+            return self.output
 
-    def backward(self, error_wrt_output,**kwargs):
-        """
-        Backward pass for batch normalization.
-        
-        Args:
-            error_wrt_output (np.ndarray): Gradient of the loss with respect to output.
-            l1 (float): L1 regularization coefficient (not used in batch norm).
-            l2 (float): L2 regularization coefficient (not used in batch norm).
-        
-        Returns:
-            np.ndarray: Gradient with respect to input.
-        """
-        batch_size = error_wrt_output.shape[0]
+    
+    def backward(self, grad):
+        B, C, H, W = self.input.shape
 
-        # Gradient w.r.t. gamma (weights) and beta (bias)
-        normalized_input_grad = error_wrt_output * self.weights  # Gradients w.r.t. gamma (scale)
-        variance_grad = np.sum(
-            normalized_input_grad * (self.input - self.mean) * (-0.5) * np.power((self.var + self.eps), -1.5),
-            axis=0, keepdims=True
-        )
-        mean_grad = np.sum(normalized_input_grad * (-1 / np.sqrt(self.var + self.eps)), axis=0, keepdims=True) + (
-            variance_grad * np.mean(-2 * (self.input - self.mean), axis=0, keepdims=True)
-        )
+        # Gradients for beta and gamma
+        dbeta = np.sum(grad, axis=(0, 2, 3), keepdims=True)  # Sum over B, H, W
+        dgamma = np.sum(grad * self.input_normalized, axis=(0, 2, 3), keepdims=True)
+        self.bias.assign_grad(dbeta)
+        self.weights.assign_grad(dgamma)
+        # Gradient w.r.t. input (dx)
+        std_inv = 1.0 / np.sqrt(self.var + self.eps)
+        dx_hat = grad * self.weights.data  # Chain rule: dy/dx_hat = gamma * grad
+        dvar = np.sum(dx_hat * (self.input.data - self.mean) * -0.5 * std_inv**3, axis=(0, 2, 3), keepdims=True)
+        dmean = np.sum(-dx_hat * std_inv, axis=(0, 2, 3), keepdims=True) + dvar * np.mean(-2 * (self.input.data - self.mean), axis=(0, 2, 3), keepdims=True)
+        dinput = dx_hat * std_inv + dvar * 2 * (self.input.data - self.mean) / (B * H * W) + dmean / (B * H * W)
+        self.input.assign_grad(dinput)
 
-        self.loss_wrt_input = (
-            normalized_input_grad * (1 / np.sqrt(self.var + self.eps)) +
-            (variance_grad * 2 * (self.input - self.mean) / batch_size) +
-            (mean_grad / batch_size)
-        )
 
-        self.grad_w = np.sum(error_wrt_output * self.input_normalized, axis=0, keepdims=True)
-        self.grad_b = np.sum(error_wrt_output, axis=0, keepdims=True) / batch_size
+class GAP(Module):
+    def __init__(self):
+        super().__init__()
+        self.input = None
+        self.output = None
+        self.input_normalized = None
+        self.output = None
 
-        return self.loss_wrt_input
-
-        
+    def __call__(self, input, **kwargs):
+        self.input = input
+        #calc mean across H and W for each channel and batch
+        output = np.mean(self.input.data, axis=(2, 3),keepdims=False)
+        self.output = Tensor(output, requires_grad=True)
+        self.output._grad_fn = self.backward
+        self.output.parents = [self.input]
+        return self.output
+    
+    def backward(self, grad):
+        #each channel gets one value as the gradient 
+        B, C, H, W = self.input.shape
+        input_grad = np.ones((B, C, H, W)) * grad[:, :, np.newaxis, np.newaxis] / (H * W)
+        self.input.assign_grad(input_grad)
