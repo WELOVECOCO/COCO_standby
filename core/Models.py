@@ -1,6 +1,6 @@
 import h5py
 from core.nn import *
-
+from core.config import Config
 class Model:
     def __init__(self):
         """
@@ -11,6 +11,7 @@ class Model:
             losses (list): Store training losses.
             last_out (ndarray or None): Store the last output for loss computation.
         """
+        
         self.layers = {}   # Dictionary to store layers/sub-models with their variable names
         self.losses = []   # Store training losses
         self.last_out = None  # Store the last output for loss computation
@@ -39,11 +40,7 @@ class Model:
 
 
     def test(self):
-        for layer in self.layers.values():
-            if isinstance(layer, Model):
-                layer.test()
-            elif isinstance(layer, Layer) or isinstance(layer, Activation):
-                layer.test()
+        Config.TEST = True
     def forward(self, x, test=False):
         """
         Users must override this method to define the forward pass.

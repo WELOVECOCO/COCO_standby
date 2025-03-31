@@ -19,11 +19,7 @@ class Layer(Module):
         self.input=None
         self.output=None
         self.name = None
-        self.testt = False
-
-
-    def test(self):
-        self.testt = True    
+   
     def parameters(self):
         return [self.weights,self.bias]
     
@@ -146,7 +142,7 @@ class Linear(Layer):
         Returns:
             np.ndarray: Gradient of loss with respect to layer input.
         """
-        grad = self.activation.backward(grad) if self.activation is not None else grad
+        grad = self.activation.grad_fn(grad) if self.activation is not None else grad
         
         # Gradient of loss w.r.t. weights
 
@@ -268,7 +264,7 @@ class Conv2d(Layer):
             np.ndarray: Gradient of the loss with respect to the input tensor.
         """
         B, F, H_out, W_out = self.output.data.shape
-        
+        grad = self.activation.grad_fn(grad) if self.activation is not None else grad
         # Gradient wrt biases
         # grad = grad.reshape(self.output.shape)
         dbias = np.sum(grad, axis=(0, 2, 3), keepdims=False)
@@ -460,7 +456,7 @@ class batchnorm2d(Layer):
     
     def __call__(self, input, **kwargs):
 
-        if self.testt==False:
+        if Config.TEST==False:
             self.input = input
             self.mean = np.mean(self.input.data, axis=(0, 2, 3), keepdims=True)
             self.var = np.var(self.input.data, axis=(0, 2, 3), keepdims=True)
