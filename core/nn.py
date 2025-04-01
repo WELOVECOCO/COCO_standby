@@ -21,7 +21,10 @@ class Layer(Module):
         self.name = None
    
     def parameters(self):
-        return [self.weights,self.bias]
+        pass
+    
+    def trained_parameters(self):
+        pass
     
     def __call__(self, input,**kwargs):
         pass
@@ -41,7 +44,7 @@ class Linear(Layer):
     and optional dropout for regularization.
     """
     
-    def __init__(self,input_dim, output_dim, initialize_type="random",activation="none",dropout=None):
+    def __init__(self,input_dim, output_dim, initialize_type="random",activation="none",dropout=None,bias=True):
         """
         Initializes a linear layer with specified weight initialization and optional dropout.
         
@@ -52,14 +55,21 @@ class Linear(Layer):
         """
         super().__init__()
         self.activation = get_activation(activation, dropout) if activation != "none" else None
-        
+        self.bias_flag = bias
         self.weights, self.bias = self.initialize_weights(input_dim, output_dim, initialize_type)
 
     def parameters(self):
-
-        return [self.weights,self.bias]
+        if self.bias_flag:
+            return [self.weights,self.bias]
+        else:
+            return [self.weights]
     
-
+    def trained_parameters(self):
+        # print("fc params")
+        if self.bias_flag:
+            return [self.weights,self.bias]
+        else:
+            return [self.weights]
     def set_parameters(self,weights,bias):
         self.weights = weights
         self.bias = bias
@@ -98,7 +108,7 @@ class Linear(Layer):
         else:
             raise ValueError(f"Unknown initialization method: {initialize_type}")
 
-        b = np.zeros((output_dim))  # Bias is always initialized to zeros
+        b = np.zeros((output_dim)) if self.bias_flag else None # Bias is always initialized to zeros
         return Tensor(w, requires_grad=True), Tensor(b, requires_grad=True)  # Return Tensor objects for weights and biases
 
     def __call__(self, input,**kwargs):
@@ -123,7 +133,9 @@ class Linear(Layer):
         elif self.input.ndim != 2:  # If input is not 2D or 4D, raise an error
             raise ValueError(f"Linear layer received input of unsupported shape {self.input.shape}")
         
-        out = (self.input.data @ self.weights.data) + self.bias.data  
+        out = (self.input.data @ self.weights.data)
+        if self.bias_flag:
+            out += self.bias.data  
         if self.activation is not None:
             out = self.activation(out)
         self.output = Tensor(out, requires_grad=True)    
@@ -149,14 +161,14 @@ class Linear(Layer):
         self.weights.grad = self.input.data.T @ grad
 
         # Gradient of loss w.r.t. bias
-        self.bias.grad = np.sum(grad, axis=0, keepdims=False)
+        self.bias.grad = np.sum(grad, axis=0, keepdims=False) if self.bias_flag else None
         
         # Gradient of loss w.r.t. input
         self.input.assign_grad(grad @ self.weights.data.T)
         
 
 class Conv2d(Layer):
-    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0, initialize_type="xavier",activation="none",dropout=None):
+    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0, initialize_type="xavier",activation="none",dropout=None,bias=True):
         """
         Initializes a 2D convolutional layer.
         
@@ -169,6 +181,7 @@ class Conv2d(Layer):
             initialize_type (str, optional): Method for initializing weights. Defaults to "xavier".
         """
         super().__init__()
+        self.bias_flag = bias
         self.input_channels = input_channels
         self.output_channels = output_channels
         self.kernel_size = kernel_size
@@ -187,8 +200,17 @@ class Conv2d(Layer):
 
 
     def parameters(self):
-
-        return [self.weights,self.bias]
+        if self.bias_flag:
+            return [self.weights,self.bias]
+        else:
+            return [self.weights]
+        
+    def trained_parameters(self):
+        # print("conv params")
+        if self.bias_flag:
+            return [self.weights,self.bias]
+        else:
+            return [self.weights]
     def initialize_weights(self, initialize_type="xavier"):
         """
         Initializes weights and biases for the Conv2D layer.
@@ -216,7 +238,7 @@ class Conv2d(Layer):
             raise ValueError(f"Unknown initialization method: {initialize_type}")
 
         # Bias is usually initialized to zero
-        b = np.zeros((self.output_channels))
+        b = np.zeros((self.output_channels)) if self.bias_flag else None
 
 
 
@@ -242,8 +264,10 @@ class Conv2d(Layer):
         # print(type(self.weights.data))
         self.input = input
         output, self.col_matrix = self.convolver.convolve(self.input.data, self.weights.data, stride=self.stride, padding=self.padding)
-        bias_reshaped = self.bias.data.reshape(1, self.output_channels, 1, 1)
-        output = output + bias_reshaped
+        if self.bias_flag:
+            bias_reshaped = self.bias.data.reshape(1, self.output_channels, 1, 1)
+            output = output + bias_reshaped
+
         # output = output + self.bias.data
         if self.activation is not None:
             output = self.activation(output)
@@ -267,8 +291,9 @@ class Conv2d(Layer):
         grad = self.activation.grad_fn(grad) if self.activation is not None else grad
         # Gradient wrt biases
         # grad = grad.reshape(self.output.shape)
-        dbias = np.sum(grad, axis=(0, 2, 3), keepdims=False)
-        self.bias.assign_grad(dbias)
+        if self.bias_flag:
+            dbias = np.sum(grad, axis=(0, 2, 3), keepdims=False)
+            self.bias.assign_grad(dbias)
         # assert self.bias.grad.shape == self.bias.shape
         
         # Gradient wrt weights
@@ -454,6 +479,10 @@ class batchnorm2d(Layer):
     def parameters(self):
         return [self.weights,self.bias]
     
+    def trained_parameters(self):
+        # print("bn params")
+        return [self.weights,self.bias,self.running_mean,self.running_variance]
+    
     def __call__(self, input, **kwargs):
 
         if Config.TEST==False:
@@ -517,3 +546,4 @@ class GAP(Module):
         B, C, H, W = self.input.shape
         input_grad = np.ones((B, C, H, W)) * grad[:, :, np.newaxis, np.newaxis] / (H * W)
         self.input.assign_grad(input_grad)
+

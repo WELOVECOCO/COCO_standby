@@ -26,16 +26,31 @@ class Model:
             self.layers[name] = value
 
     def parameters(self):
-        """
-        Return the model parameters. If a layer is a composite model, recursively collect its parameters.
-        """
         params = []
+        seen = set()  # Track seen objects to avoid duplicates
         for layer in self.layers.values():
-            if isinstance(layer, Model):  # Composite model
+            
+            if id(layer) in seen:
+                continue
+            seen.add(id(layer))
+            if isinstance(layer, Model):
                 params += layer.parameters()
             elif isinstance(layer, Layer):
                 params += layer.parameters()
-            # You can add additional cases if other types hold parameters.
+        return params
+
+    
+    def trained_parameters(self):
+        params = []
+        seen = set()  # Track seen objects to avoid duplicates
+        for layer in self.layers.values():
+            if id(layer) in seen:
+                continue
+            seen.add(id(layer))
+            if isinstance(layer, Model):
+                params += layer.trained_parameters()
+            elif isinstance(layer, Layer):
+                params += layer.trained_parameters()
         return params
 
 
@@ -86,84 +101,14 @@ class Model:
         # Assuming output_tensor is an instance of Tensor and has view_graph
         output_tensor.view_graph(filename=filename, format=format, view=view)
 
-    def save_model(self, filepath):
-        """
-        Save the model parameters to an .h5 file.
-        For composite models, save the parameters of each sub-model recursively.
-        """
-        with h5py.File(filepath, 'w') as f:
-            for name, layer in self.layers.items():
-                # If the layer is a composite model, create a group for it and let it save its parameters.
-                if isinstance(layer, Model):
-                    grp = f.create_group(name)
-                    layer._save_to_group(grp)
-                else:
-                    if hasattr(layer, 'weights'):
-                        f.create_dataset(f'{name}/weights', data=layer.weights.data)
-                    if hasattr(layer, 'bias'):
-                        f.create_dataset(f'{name}/bias', data=layer.bias.data)
-
-    def _save_to_group(self, group):
-        """
-        Helper function to save parameters into an existing HDF5 group.
-        """
-        for name, layer in self.layers.items():
-            if isinstance(layer, Model):
-                grp = group.create_group(name)
-                layer._save_to_group(grp)
-            else:
-                if hasattr(layer, 'weights'):
-                    group.create_dataset(f'{name}/weights', data=layer.weights.data)
-                if hasattr(layer, 'bias'):
-                    group.create_dataset(f'{name}/bias', data=layer.bias.data)
-
-    def load_model(self, filepath):
-        """
-        Load model parameters from an .h5 file.
-        The architecture of the model (including composite models) must match the saved file.
-        """
-        with h5py.File(filepath, 'r') as f:
-            for name, layer in self.layers.items():
-                if isinstance(layer, Model):
-                    if name in f:
-                        layer._load_from_group(f[name])
-                else:
-                    if hasattr(layer, 'weights') and f.get(f'{name}/weights'):
-                        layer.weights.data = f[f'{name}/weights'][:]
-                    if hasattr(layer, 'bias') and f.get(f'{name}/bias'):
-                        layer.bias.data = f[f'{name}/bias'][:]
-
-    def _load_from_group(self, group):
-        """
-        Helper function to load parameters from an existing HDF5 group.
-        """
-        for name, layer in self.layers.items():
-            if isinstance(layer, Model):
-                if name in group:
-                    layer._load_from_group(group[name])
-            else:
-                if hasattr(layer, 'weights') and group.get(f'{name}/weights'):
-                    layer.weights.data = group[f'{name}/weights'][:]
-                if hasattr(layer, 'bias') and group.get(f'{name}/bias'):
-                    layer.bias.data = group[f'{name}/bias'][:]
     def load_weights_by_structure(self, state_dict, strict=True):
-        """
-        Load pre-trained weights into the model based on parameter order and shape, ignoring names.
 
-        Args:
-            state_dict (dict): Dictionary of pre-trained weights (keys are names, values are numpy arrays).
-            strict (bool): If True, raises an error if shapes don’t match or there are unused weights.
-                        If False, skips mismatches silently.
-
-        Returns:
-            None
-        """
         # Get the model's parameters in order
-        model_params = self.parameters()  # Assumes parameters() returns a list of Tensors
+        model_params = self.trained_parameters()  # Assumes parameters() returns a list of Tensors
 
         # Flatten the state_dict values into a list (ignore keys)
         pretrained_weights = list(state_dict.values())
-
+        
         if len(pretrained_weights) != len(model_params):
             warning = (f"Number of pre-trained weights ({len(pretrained_weights)}) does not match "
                     f"number of model parameters ({len(model_params)})")
@@ -177,6 +122,8 @@ class Model:
             weight = np.array(weight)
             if weight.ndim == 2:
                 weight = weight.T
+            if param.data.ndim == 4 and weight.ndim == 1 and weight.shape[0] == param.data.shape[1]:
+                weight = weight.reshape((1, weight.shape[0], 1, 1))
             if param.data.shape != weight.shape:
                 error_msg = (f"Shape mismatch at parameter {i}: "
                             f"model expects {param.data.shape}, "

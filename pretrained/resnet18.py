@@ -13,7 +13,8 @@ class BasicBlock(Model):
             kernel_size=3,
             stride=stride,
             padding=1,
-            initialize_type='zero'
+            initialize_type='zero',
+            bias=False
         )
         self.bn1 = batchnorm2d(out_channels)
         self.relu = Relu()
@@ -25,7 +26,9 @@ class BasicBlock(Model):
             kernel_size=3,
             stride=1,
             padding=1,
-            initialize_type='zero'
+            initialize_type='zero',
+            bias=False
+            
         )
         self.bn2 = batchnorm2d(out_channels)
         
@@ -58,7 +61,8 @@ class DownsampleBlock(Model):
             kernel_size=1,
             stride=stride,
             padding=0,
-            initialize_type='zero'
+            initialize_type='zero',
+            bias=False
         )
         self.bn = batchnorm2d(out_channels)
     
@@ -77,7 +81,8 @@ class Backbone(Model):
             kernel_size=7,
             stride=2,
             padding=3,
-            initialize_type='zero'
+            initialize_type='zero',
+            bias=False
         )
         self.bn1 = batchnorm2d(64)
         self.relu = Relu()
@@ -88,18 +93,18 @@ class Backbone(Model):
         self.block1_2 = BasicBlock(64, 64)
         
         # Layer 2 (128 filters)
-        self.downsample2_1 = DownsampleBlock(64, 128, stride=2)
-        self.block2_1 = BasicBlock(64, 128, stride=2, downsample=self.downsample2_1)
+        # self.downsample2_1 = DownsampleBlock(64, 128, stride=2)
+        self.block2_1 = BasicBlock(64, 128, stride=2, downsample=DownsampleBlock(64, 128, stride=2))
         self.block2_2 = BasicBlock(128, 128)
         
         # Layer 3 (256 filters)
-        self.downsample3_1 = DownsampleBlock(128, 256, stride=2)
-        self.block3_1 = BasicBlock(128, 256, stride=2, downsample=self.downsample3_1)
+        # self.downsample3_1 = DownsampleBlock(128, 256, stride=2)
+        self.block3_1 = BasicBlock(128, 256, stride=2, downsample=DownsampleBlock(128, 256, stride=2))
         self.block3_2 = BasicBlock(256, 256)
         
         # Layer 4 (512 filters)
-        self.downsample4_1 = DownsampleBlock(256, 512, stride=2)
-        self.block4_1 = BasicBlock(256, 512, stride=2, downsample=self.downsample4_1)
+        # self.downsample4_1 = DownsampleBlock(256, 512, stride=2)
+        self.block4_1 = BasicBlock(256, 512, stride=2, downsample=DownsampleBlock(256, 512, stride=2))
         self.block4_2 = BasicBlock(512, 512)
     
     def forward(self, x):
@@ -152,7 +157,8 @@ def load_from_pretrained(model, strict=True):
     # Download the pre-trained ResNet-18 model
     pytorch_resnet18 = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1, progress=True)
     state_dict = pytorch_resnet18.state_dict()
-    model.load_weights_by_structure(state_dict, strict=strict)
+    filtered_state_dict = {k: v for k, v in state_dict.items() if "num_batches_tracked" not in k}
+    model.load_weights_by_structure(filtered_state_dict, strict=strict)
     print("Pre-trained ResNet-18 weights loaded from .pth file")
 
 @staticmethod
