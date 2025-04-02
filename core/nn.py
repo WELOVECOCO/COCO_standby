@@ -1,9 +1,10 @@
-
 import numpy as np
 from core.operations import FastConvolver
 from numpy.lib.stride_tricks import sliding_window_view
 from core.tensor import Tensor
 from core.Function import *
+
+
 class Module:
     def __init__(self):
         pass
@@ -34,8 +35,6 @@ class Layer(Module):
 
     def initialize_weights(self, shape,initialize_type):
         pass
-
-    
 
 class Linear(Layer):
     """
@@ -165,7 +164,6 @@ class Linear(Layer):
         
         # Gradient of loss w.r.t. input
         self.input.assign_grad(grad @ self.weights.data.T)
-        
 
 class Conv2d(Layer):
     def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0, initialize_type="xavier",activation="none",dropout=None,bias=True):
@@ -327,9 +325,6 @@ class Conv2d(Layer):
         self.input.assign_grad(dInput) 
         
         # assert dInput.shape == self.input.shape
-        
-
-
 
 class MaxPool2d(Module):
     """
@@ -523,7 +518,6 @@ class batchnorm2d(Layer):
         dinput = dx_hat * std_inv + dvar * 2 * (self.input.data - self.mean) / (B * H * W) + dmean / (B * H * W)
         self.input.assign_grad(dinput)
 
-
 class GAP(Module):
     def __init__(self):
         super().__init__()
@@ -546,4 +540,66 @@ class GAP(Module):
         B, C, H, W = self.input.shape
         input_grad = np.ones((B, C, H, W)) * grad[:, :, np.newaxis, np.newaxis] / (H * W)
         self.input.assign_grad(input_grad)
+
+
+##############################################################################################
+#                                                                                            #
+#                                                                                            #
+#                                                                                            #
+#                    Transformers Building Blocks (Attention + ViT Patches)                  #
+#                                                                                            #
+#                                                                                            #
+#                                                                                            #
+##############################################################################################
+
+
+class PatchEmbedding(Layer):
+    def __init__(self, img_size=224, patch_size=16, in_channels=3, embed_dim=768):
+        super().__init__()
+        assert img_size % patch_size == 0, "Image size must be divisible by patch size"
+
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.n_patches = (img_size // patch_size) ** 2
+        self.proj = Conv2d(
+            input_channels=in_channels,
+            output_channels=embed_dim,
+            kernel_size=patch_size,
+            stride=patch_size,
+            bias=False
+        )
+
+    def __call__(self, x, **kwargs):
+        # x: shape (B, C, H, W)
+        x = self.proj(x)  # (B, E, H/P, W/P)
+
+        # Reshape and transpose
+        B = x.shape[0]
+        x = x.reshape(B, x.shape[1], -1)  # (B, E, N)
+        x = x.transpose(0, 2, 1)  # (B, N, E)
+        return x
+
+class PositionalEmbedding(Layer):
+    def __init__(self, n_patches, embed_dim):
+        super().__init__()
+        self.pos_embed = Tensor(
+            np.random.randn(1, n_patches + 1, embed_dim) * 0.02, # Multiplied for scale control
+            requires_grad=True
+        )
+
+    def __call__(self, x, **kwargs):
+        return x + self.pos_embed[:, :x.shape[1]]
+
+class LayerNorm(Layer):
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.gamma = Tensor(np.ones(dim), requires_grad=True)
+        self.beta = Tensor(np.zeros(dim), requires_grad=True)
+        self.eps = eps
+
+    def __call__(self, x, **kwargs):
+        mean = x.mean(axis=-1, keepdims=True)
+        std = x.std(axis=-1, keepdims=True)
+        x_norm = (x - mean) / (std + self.eps)
+        return self.gamma * x_norm + self.beta
 
