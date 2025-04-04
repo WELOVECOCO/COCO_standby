@@ -193,6 +193,43 @@ class Tensor:
         return out
 
 
+    def __getitem__(self, key):
+        """
+        Enable NumPy-like indexing and slicing, e.g., tensor[:2, :, :, :-1].
+        
+        Args:
+            key: Index or slice (int, slice, tuple of slices/ints, etc.).
+        
+        Returns:
+            Tensor: A new Tensor instance with the sliced data.
+        """
+        # Apply the slice/index to the underlying data
+        sliced_data = self.data[key]
+
+        # If this tensor doesn't require gradients, return a simple Tensor
+        if not self.requires_grad:
+            return Tensor(sliced_data, requires_grad=False)
+
+        # Define a backward function to propagate gradients to the original tensor
+        def backward_sliced(grad):
+            # Create a zero gradient array matching the original shape
+            full_grad = np.zeros_like(self.data)
+            # Place the incoming gradient into the appropriate slice
+            full_grad[key] = grad
+            # Propagate the gradient to this tensor
+            self.assign_grad(full_grad)
+
+        # Return a new Tensor with the sliced data and gradient tracking
+        return Tensor(
+            data=sliced_data,
+            requires_grad=True,
+            parents=[self],
+            grad_fn=backward_sliced
+        )
+    
+
+    def __repr__(self):
+        return f"Tensor(shape={self.data.shape}, requires_grad={self.requires_grad})"
     def reshape(self, *shape):
         """Reshape."""
         out = Tensor(self.data.reshape(shape), self.requires_grad)

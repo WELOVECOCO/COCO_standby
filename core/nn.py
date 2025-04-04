@@ -646,7 +646,7 @@ class PositionalEmbedding(Layer):
         super().__init__()
         self.pos_embed = Tensor(
             np.random.randn(1, n_patches + 1, embed_dim) * 0.02, # Multiplied for scale control
-            requires_grad=True
+            requires_grad=False
         )
 
     def __call__(self, x, **kwargs):
