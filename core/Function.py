@@ -177,11 +177,12 @@ class Softmax(Activation):
             Tensor: Output Tensor with softmax applied.
         """
         # Subtract max for numerical stability
+        axs = kwargs.get('axis', 1)
         if isinstance(x, Tensor):
             self.fused = False
-            max_vals = np.max(x.data, axis=1, keepdims=True)
+            max_vals = np.max(x.data, axis=axs, keepdims=True)
             exp_x = np.exp(x.data - max_vals)
-            sum_exp = np.sum(exp_x, axis=1, keepdims=True)
+            sum_exp = np.sum(exp_x, axis=axs, keepdims=True)
             out_data = exp_x / sum_exp
             if Config.TEST == False:
                 out_data = self.apply_dropout(out_data)
@@ -193,9 +194,9 @@ class Softmax(Activation):
         else:
             self.fused = True
             # Fused mode (x is a numpy array)
-            max_vals = np.max(x, axis=1, keepdims=True)
+            max_vals = np.max(x, axis=axs, keepdims=True)
             exp_x = np.exp(x - max_vals)
-            sum_exp = np.sum(exp_x, axis=1, keepdims=True)
+            sum_exp = np.sum(exp_x, axis=axs, keepdims=True)
             out_data = exp_x / sum_exp
             if Config.TEST == False:
                 out_data = self.apply_dropout(out_data)

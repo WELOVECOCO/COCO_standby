@@ -1,4 +1,4 @@
-from core.nn import Conv2d, MaxPool2d, Linear, Relu ,GAP ,batchnorm2d
+from core.nn import Conv2d, MaxPool2d, Linear, Relu ,GAP ,batchnorm2d , Flatten
 from core.Models import Model
 
 
@@ -108,10 +108,12 @@ class VGG16_model(Model):
     def __init__(self, num_classes=1000):
         super().__init__()
         self.features = Features()
+        self.flatten = Flatten()
         self.classifier = Classifier(num_classes=num_classes)
 
     def forward(self, x):
         x = self.features(x)
+        x = self.flatten(x)
         x = self.classifier(x)
         return x
 

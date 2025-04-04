@@ -1,4 +1,4 @@
-from core.nn import Conv2d, MaxPool2d, Linear, Relu, batchnorm2d, GAP
+from core.nn import Conv2d, MaxPool2d, Linear, Relu, batchnorm2d, GAP , Flatten
 from core.Models import Model
 
 class BasicBlock(Model):
@@ -132,10 +132,11 @@ class Classifier(Model):
         super().__init__()
         self.avgpool = GAP()  # Global Average Pooling
         self.fc = Linear(512 * BasicBlock.expansion, num_classes, initialize_type='zero')
+        self.flatten = Flatten()
     
     def forward(self, x):
         x = self.avgpool(x)
-        # x = x.view(x.shape[0], -1)  # Flatten
+        x = self.flatten(x)
         x = self.fc(x)
         return x
 

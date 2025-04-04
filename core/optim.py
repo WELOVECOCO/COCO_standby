@@ -35,16 +35,6 @@ def get_optimizer(name, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, 
         raise ValueError("Unknown optimizer: " + name)
 
 
-
-
-
-
-
-
-   
-
-    
-
 class Optimizer:
 
     def __init__(self,params, learning_rate=0.001, beta1=0.9, beta2=0.999, EMA=False, clip_value=10):

@@ -1,10 +1,10 @@
 import numpy as np
 from core.Functional import (AddBackward, MulBackward, DivBackward, PowBackward,
                              NegBackward, ReshapeBackward, TransposeBackward, MatMulBackward,
-                             LogBackward, MeanBackward,SumBackward)
+                             LogBackward, MeanBackward,SumBackward,SplitBackward)
 
 class Tensor:
-    def __init__(self, data, requires_grad=True):
+    def __init__(self, data, requires_grad=True,grad_fn=None,parents=None):
         # Ensure data is a numpy array of type float32 for numerical stability.
         if not isinstance(data, np.ndarray):
             data = np.array(data, dtype=np.float32)
@@ -13,8 +13,8 @@ class Tensor:
         self.data = data
         self.grad = None
         self.requires_grad = requires_grad
-        self._grad_fn = None  # backward function (or node)
-        self.parents = []     # list of Tensors used to compute this Tensor
+        self._grad_fn = grad_fn  # backward function (or node)
+        self.parents = [parents] if parents is not None else []     # list of Tensors used to compute this Tensor
 
     def __repr__(self):
         return f"Tensor(data={self.data}, requires_grad={self.requires_grad})"
@@ -59,7 +59,7 @@ class Tensor:
         topo_order = self._topological_sort()
         for node in topo_order:
             if node._grad_fn is not None:
-                # print("function now :",node._grad_fn)
+                # print("func:",node._grad_fn)
                 node._grad_fn(node.grad)
                 # print("grad:",node.grad)
 
@@ -183,6 +183,116 @@ class Tensor:
         return out
     
 
+    def transpose(self, *axes):
+        """Transpose."""
+        out = Tensor(self.data.transpose(axes), self.requires_grad)
+        out.parents = [self]
+        if out.requires_grad:
+            # We use an axes permutation that swaps dimensions.
+            out._grad_fn = TransposeBackward(self, axes)
+        return out
+
+
+    def reshape(self, *shape):
+        """Reshape."""
+        out = Tensor(self.data.reshape(shape), self.requires_grad)
+        out.parents = [self]
+        if out.requires_grad:
+            out._grad_fn = ReshapeBackward(self, self.data.shape)
+        return out
+    # === Other Utilities ===
+
+    @staticmethod
+    def triu(matrix, k=0):
+        return Tensor(np.triu(matrix, k=k), requires_grad=False)
+    
+    @staticmethod
+    def tril(matrix, k=0):
+        return Tensor(np.tril(matrix, k=k), requires_grad=False)
+    
+    @staticmethod
+    def expand_dims(tensor, axis):
+        return Tensor(np.expand_dims(tensor.data, axis), requires_grad=False)
+    
+    @staticmethod
+    def squeeze(tensor, axis):
+        return Tensor(np.squeeze(tensor, axis), requires_grad=False)
+    
+    @staticmethod
+    def stack(tensors, axis=0):
+        return Tensor(np.stack(tensors, axis=axis), requires_grad=False)
+    
+    @staticmethod
+    def hstack(tensors):
+        return Tensor(np.hstack(tensors), requires_grad=False)
+    
+    @staticmethod
+    def vstack(tensors):
+        return Tensor(np.vstack(tensors), requires_grad=False)
+    
+    @staticmethod
+    def concatenate(tensors, axis=0):
+        return Tensor(np.concatenate(tensors, axis=axis), requires_grad=False)
+    
+    @staticmethod
+    def split(tensor, indices_or_sections, axis):
+        # Get the split tensors from np.split
+        out = np.split(tensor.data, indices_or_sections, axis=axis)
+        
+        # Ensure that the split tensors have the same requires_grad as the original tensor
+        split_tensors = []
+        num_splits = len(out)  # Number of splits
+        
+        for i, split_tensor in enumerate(out):
+            split_tensor = Tensor(split_tensor, requires_grad=tensor.requires_grad)
+            split_tensor._grad_fn = SplitBackward(tensor, indices_or_sections, axis, num_splits)
+            split_tensor.parents = [tensor]  # Set parent to the original tensor
+            split_tensors.append(split_tensor)
+        
+        return tuple(split_tensors)
+
+    
+    @staticmethod
+    def tile(tensor, reps):
+        return Tensor(np.tile(tensor, reps), requires_grad=False)
+    
+    @staticmethod
+    def repeat(tensor, repeats, axis=None):
+        return Tensor(np.repeat(tensor, repeats, axis=axis), requires_grad=False)
+    
+    @staticmethod
+    def softmax(x, axis=1):
+        e_x = np.exp(x.data - np.max(x.data, axis=axis, keepdims=True))
+        return Tensor(e_x / e_x.sum(axis=axis, keepdims=True), requires_grad=False)
+
+
+
+    @property
+    def T(self):
+        """Transpose."""
+        out = Tensor(self.data.T, self.requires_grad)
+        out.parents = [self]
+        if out.requires_grad:
+            # We use an axes permutation that swaps dimensions.
+            out._grad_fn = TransposeBackward(self, None)
+        return out
+
+    @property
+    def shape(self):
+        return self.data.shape
+
+    @property
+    def ndim(self):
+        return self.data.ndim
+
+    @property
+    def size(self):
+        return self.data.size
+
+    @property
+    def dtype(self):
+        return self.data.dtype
+
     def view_graph(self, filename="computational_graph", format="png", view=False):
        
         from graphviz import Digraph
@@ -234,32 +344,3 @@ class Tensor:
         add_tensor(self)
         dot.render(filename, view=view)
         return dot
-
-
-    # === Other Utilities ===
-
-    @property
-    def T(self):
-        """Transpose."""
-        out = Tensor(self.data.T, self.requires_grad)
-        out.parents = [self]
-        if out.requires_grad:
-            # We use an axes permutation that swaps dimensions.
-            out._grad_fn = TransposeBackward(self, None)
-        return out
-
-    @property
-    def shape(self):
-        return self.data.shape
-
-    @property
-    def ndim(self):
-        return self.data.ndim
-
-    @property
-    def size(self):
-        return self.data.size
-
-    @property
-    def dtype(self):
-        return self.data.dtype
