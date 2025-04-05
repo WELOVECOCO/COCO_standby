@@ -1,7 +1,7 @@
 import numpy as np
 from core.Functional import (AddBackward, MulBackward, DivBackward, PowBackward,
                              NegBackward, ReshapeBackward, TransposeBackward, MatMulBackward,
-                             LogBackward, MeanBackward,SumBackward,SplitBackward)
+                             LogBackward, MeanBackward,SumBackward,SplitBackward,StdBackward,SubBackward)
 
 class Tensor:
     def __init__(self, data, requires_grad=True,grad_fn=None,parents=None):
@@ -58,10 +58,10 @@ class Tensor:
         # Get nodes in topological order so that we call each node’s backward function only after its dependents.
         topo_order = self._topological_sort()
         for node in topo_order:
-            if node._grad_fn is not None:
+            if node._grad_fn is not None and node.requires_grad:
                 # print("func:",node._grad_fn)
                 node._grad_fn(node.grad)
-                # print("grad:",node.grad)
+                # print(f"grad of function {node._grad_fn}: {node.grad}")
 
         if not retain_graph:
             for node in topo_order:
@@ -71,6 +71,7 @@ class Tensor:
 
     def __add__(self, other):
         if not isinstance(other, Tensor):
+            print("ADD: other is not a Tensor, converting to Tensor")
             other = Tensor(other, requires_grad=False)
         out = Tensor(self.data + other.data, self.requires_grad or other.requires_grad)
         out.parents = [self, other]
@@ -99,18 +100,21 @@ class Tensor:
         out = Tensor(self.data - other.data, self.requires_grad or other.requires_grad)
         out.parents = [self, other]
         if out.requires_grad:
+            
             # a - b = a + (-b)
-            out._grad_fn = AddBackward(self, -other)
+            out._grad_fn = SubBackward(self, other)
         return out
 
     def __rsub__(self, other):
         # other - self
-        return Tensor(other, requires_grad=False).__sub__(self)
+        
+        return Tensor(other, requires_grad=True).__sub__(self)
 
     def __neg__(self):
         out = Tensor(-self.data, self.requires_grad)
         out.parents = [self]
         if out.requires_grad:
+            # Negation is equivalent to multiplying by -1.	
             out._grad_fn = NegBackward(self)
         return out
 
@@ -173,7 +177,15 @@ class Tensor:
             out._grad_fn = MeanBackward(self, axis, keepdims)
         return out
 
-
+    def std(self, axis=None, keepdims=False):
+        """Compute the standard deviation and record the backward operation."""
+        std_value = np.std(self.data, axis=axis, keepdims=keepdims)
+        out = Tensor(std_value, self.requires_grad)
+        out.parents = [self]
+        if out.requires_grad:
+            out._grad_fn = StdBackward(self, axis, keepdims)
+        return out
+    
     def sum(self, axis=None, keepdims=False):
         """Compute the sum and record the backward operation."""
         out = Tensor(np.sum(self.data, axis=axis, keepdims=keepdims), self.requires_grad)
@@ -192,7 +204,13 @@ class Tensor:
             out._grad_fn = TransposeBackward(self, axes)
         return out
 
-
+    def std(self, axis=None, keepdims=False):
+        """Compute the standard deviation along the specified axis."""
+        out = Tensor(np.std(self.data, axis=axis, keepdims=keepdims), requires_grad=self.requires_grad)
+        out.parents = [self]
+        if self.requires_grad:
+            out._grad_fn = StdBackward(self, axis, keepdims)
+        return out
     def __getitem__(self, key):
         """
         Enable NumPy-like indexing and slicing, e.g., tensor[:2, :, :, :-1].

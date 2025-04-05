@@ -6,8 +6,10 @@ class AddBackward:
         self.b = b
     def __call__(self, grad):
         if self.a.requires_grad:
+            # print("a requires grad", self.a._grad_fn)
             self.a.assign_grad(grad)
         if self.b.requires_grad:
+            # print("b requires grad", self.b._grad_fn)
             self.b.assign_grad(grad)
 
 class MulBackward:
@@ -38,10 +40,21 @@ class PowBackward:
         if self.a.requires_grad:
             self.a.assign_grad(grad * self.power * (self.a.data ** (self.power - 1)))
 
+class SubBackward:
+    def __init__(self, a, b):
+        self.a = a
+        self.b = b
+    def __call__(self, grad):
+        if self.a.requires_grad:
+            self.a.assign_grad(grad)
+        if self.b.requires_grad:
+            self.b.assign_grad(-grad)
+
 class NegBackward:
     def __init__(self, a):
         self.a = a
     def __call__(self, grad):
+        print("NEGGGGG BACKWARD")
         if self.a.requires_grad:
             self.a.assign_grad(-grad)
 
@@ -54,6 +67,7 @@ class ReshapeBackward:
         if self.a.requires_grad:
             # Ensure that the gradient is reshaped back to the original shape
             self.a.assign_grad(grad.reshape(self.original_shape))
+
 
 
 class TransposeBackward:
@@ -134,6 +148,27 @@ class LogBackward:
         if self.a.requires_grad:
             self.a.assign_grad(grad / self.a.data)
 
+class StdBackward:
+    def __init__(self, a, axis, keepdims):
+        self.a = a
+        self.axis = axis
+        self.keepdims = keepdims
+        self.mean = np.mean(a.data, axis=axis, keepdims=True)  # Compute mean
+        self.std = np.std(a.data, axis=axis, keepdims=True)  # Compute std
+    
+    def __call__(self, grad):
+        if self.a.requires_grad:
+            
+            # Ensure std is not zero to avoid division by zero
+            std_safe = self.std + 1e-10
+            
+            # Gradient formula: (X - mean) / (N * std)
+            n = np.prod(np.array(self.a.data.shape)[self.axis]) if self.axis is not None else self.a.data.size
+            grad_expanded = np.expand_dims(grad, self.axis) if (not self.keepdims and self.axis is not None) else grad
+            grad_input = (self.a.data - self.mean) / (n * std_safe) * grad_expanded
+            
+            self.a.assign_grad(grad_input)
+
 class MeanBackward:
     def __init__(self, a, axis, keepdims):
         self.a = a
@@ -141,6 +176,8 @@ class MeanBackward:
         self.keepdims = keepdims
     def __call__(self, grad):
         if self.a.requires_grad:
+           
+            # print(f"grad: {grad}")
             # The gradient of mean is simply 1/N distributed to every element.
             # Compute the number of elements reduced.
             if self.axis is None:
@@ -152,6 +189,9 @@ class MeanBackward:
             grad_expanded = grad
             if not self.keepdims and self.axis is not None:
                 grad_expanded = np.expand_dims(grad, self.axis)
+
+            # print(f"a type: {type(self.a.data)}, grad type: {type(grad_expanded)}")
+            # print(f"grad_expanded: {grad_expanded}, n: {n}")
             self.a.assign_grad(np.ones_like(self.a.data) * (grad_expanded / n))
 
 

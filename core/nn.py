@@ -657,13 +657,15 @@ class LayerNorm(Layer):
         super().__init__()
         self.gamma = Tensor(np.ones(dim), requires_grad=True)
         self.beta = Tensor(np.zeros(dim), requires_grad=True)
-        self.eps = eps
+        self.eps = Tensor(eps, requires_grad=True)
 
     def __call__(self, x, **kwargs):
         mean = x.mean(axis=-1, keepdims=True)
         std = x.std(axis=-1, keepdims=True)
         x_norm = (x - mean) / (std + self.eps)
-        return self.gamma * x_norm + self.beta
+        output = self.gamma * x_norm + self.beta
+        
+        return output
 
 
 class MultiHeadAttention(Layer):
