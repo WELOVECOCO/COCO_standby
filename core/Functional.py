@@ -54,9 +54,9 @@ class NegBackward:
     def __init__(self, a):
         self.a = a
     def __call__(self, grad):
-        print("NEGGGGG BACKWARD")
         if self.a.requires_grad:
-            self.a.assign_grad(-grad)
+            grad = -grad
+            self.a.assign_grad(grad)
 
 class ReshapeBackward:
     def __init__(self, a, original_shape):

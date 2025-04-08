@@ -669,7 +669,7 @@ class LayerNorm(Layer):
 
 
 class MultiHeadAttention(Layer):
-    def __init__(self, dmodel, nheads=1, masked=False):
+    def __init__(self, dmodel, nheads=1, masked=False,encoder_decoder=False):
         super().__init__()
         self.dmodel = dmodel
         self.nheads = nheads
@@ -679,11 +679,19 @@ class MultiHeadAttention(Layer):
         self.out_proj = Linear(dmodel, dmodel, initialize_type='he')
         self.masked = masked
         self.sftmax = Softmax()
+        self.encoder_decoder = encoder_decoder
 
     def __call__(self, x, **kwargs):
         B, T, dmodel = x.shape
-        qkv = self.attn_proj(x).data  # (B, T, dmodel * 3)
-        q, k, v = np.split(qkv, 3, axis=2)  # Split into Q, K, V (B, T, dmodel)
+        if self.encoder_decoder==False:
+            qkv = self.attn_proj(x).data  # (B, T, dmodel * 3)
+            q, k, v = np.split(qkv, 3, axis=2)  # Split into Q, K, V (B, T, dmodel)
+        
+        else:
+            q = kwargs['q']
+            k = kwargs['k']
+            v = kwargs['v']
+        
 
         # Reshape for multi-head attention
         q = q.reshape(B, T, self.nheads, self.head_dim).transpose(0, 2, 1, 3)  # (B, nheads, T, head_dim)
@@ -736,14 +744,20 @@ class MultiHeadAttention(Layer):
         grad_k = grad_k.transpose(0, 2, 1, 3).reshape(B, T, dmodel)
         grad_v = grad_v.transpose(0, 2, 1, 3).reshape(B, T, dmodel)
 
+        if self.encoder_decoder==False:
         # Combine gradients for Q, K, V
-        grad_qkv = np.concatenate([grad_q, grad_k, grad_v], axis=2)  # (B, T, dmodel * 3)
+            grad_qkv = np.concatenate([grad_q, grad_k, grad_v], axis=2)  # (B, T, dmodel * 3)
 
-        # Backprop through input projection
-        grad_x = self.attn_proj.backward(grad_qkv, ret_grad=True)
+            # Backprop through input projection
+            grad_x = self.attn_proj.backward(grad_qkv, ret_grad=True)
 
-        # Assign gradient to input
-        self.input.assign_grad(grad_x)
+            # Assign gradient to input
+            self.input.assign_grad(grad_x)
+        else:
+            # Assign gradients to Q, K, V inputs
+            self.q.assign_grad(grad_q)
+            self.k.assign_grad(grad_k)
+            self.v.assign_grad(grad_v)
         return grad_x if kwargs.get('ret_grad', False) else None
 
 
