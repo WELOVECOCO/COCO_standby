@@ -3,6 +3,7 @@ from core.Functional import (AddBackward, MulBackward, DivBackward, PowBackward,
                              NegBackward, ReshapeBackward, TransposeBackward, MatMulBackward,
                              LogBackward, MeanBackward,SumBackward,SplitBackward,StdBackward,SubBackward)
 
+#TODO: what the fuck is this doing in memory?
 class Tensor:
     def __init__(self, data, requires_grad=True,grad_fn=None,parents=None):
         # Ensure data is a numpy array of type float32 for numerical stability.
@@ -44,7 +45,7 @@ class Tensor:
                     visit(parent)
                 order.append(node)
         visit(self)
-        return order[::-1]  # reverse postorder
+        return order[::-1]  # reverse topo order
 
     def backward(self, grad=None, retain_graph=False):
         """Backward pass: compute gradients through the computation graph."""
@@ -54,6 +55,7 @@ class Tensor:
         if grad is None:
             # if scalar loss, the default grad is 1.
             grad = np.ones_like(self.parents[0].data)
+
         self.assign_grad(grad)
         # Get nodes in topological order so that we call each node’s backward function only after its dependents.
         topo_order = self._topological_sort()
@@ -63,9 +65,6 @@ class Tensor:
                 node._grad_fn(node.grad)
                 # print(f"grad of function {node._grad_fn}: {node.grad}")
 
-        if not retain_graph:
-            for node in topo_order:
-                node._grad_fn = None
 
     # === Overloaded Operators ===
 
@@ -297,10 +296,10 @@ class Tensor:
         # Ensure that the split tensors have the same requires_grad as the original tensor
         split_tensors = []
         num_splits = len(out)  # Number of splits
-        
+        grad_fn = SplitBackward(tensor, indices_or_sections, axis, num_splits)  # Get the original gradient function
         for i, split_tensor in enumerate(out):
             split_tensor = Tensor(split_tensor, requires_grad=tensor.requires_grad)
-            split_tensor._grad_fn = SplitBackward(tensor, indices_or_sections, axis, num_splits)
+            split_tensor._grad_fn = grad_fn
             split_tensor.parents = [tensor]  # Set parent to the original tensor
             split_tensors.append(split_tensor)
         

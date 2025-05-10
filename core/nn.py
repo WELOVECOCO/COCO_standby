@@ -669,6 +669,12 @@ class LayerNorm(Layer):
 
 
 class MultiHeadAttention(Layer):
+    """
+
+    look , nromally you have fixed weights for any input what is different about attention mechanism is that the weights are not fixed they are dynamic and depend on the input.
+    so its not like the model knows what is the relationship really between words are maybe this is an emergent feature of the model but it is litterally just dynamic weights per input
+    and multi head  (nheads) is just doing that n times with the same number of weights 
+    """
     def __init__(self, dmodel, nheads=1, masked=False,encoder_decoder=False):
         super().__init__()
         self.dmodel = dmodel
@@ -700,6 +706,7 @@ class MultiHeadAttention(Layer):
 
         # Compute attention scores
         attn_scores = (q @ k.transpose(0, 1, 3, 2)) / np.sqrt(self.head_dim)  # (B, nheads, T, T)
+         
         if self.masked:
             mask = np.triu(np.ones((T, T), dtype=np.float32), k=1) * -1e10
             attn_scores += mask
