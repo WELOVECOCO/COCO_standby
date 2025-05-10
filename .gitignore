@@ -13,3 +13,6 @@ mnist_coco.pkl
 .idea/modules.xml
 .idea/vcs.xml
 .idea/workspace.xml
+.vscode/c_cpp_properties.json
+.vscode/launch.json
+.vscode/settings.json
