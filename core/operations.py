@@ -1,6 +1,5 @@
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
-import numpy as np
 from numpy.lib.stride_tricks import as_strided
 
 class FastConvolver:
@@ -458,3 +457,79 @@ class WinogradConv:
 
         return Y
 
+###########################################################################################
+##
+##                     Fast-Fourier-Transform Convolution
+##
+############################################################################################
+
+class FFTConvolver:
+    """
+    Performs 2D convolution using Fast Fourier Transform (FFT) for efficient computation,
+    particularly suited for large kernels (size >= 7) in convolutional neural networks.
+    Implements cross-correlation to match standard deep learning frameworks like PyTorch.
+    """
+
+    def convolve(self, input, kernels, stride=1, padding=0):
+        """
+        Applies FFT-based 2D convolution to the input tensor using the provided kernels.
+
+        Args:
+            input (np.ndarray): Input tensor of shape (batch_size, in_channels, height, width).
+            kernels (np.ndarray): Kernel tensor of shape (out_channels, in_channels, kernel_height, kernel_width).
+            stride (int, optional): Stride of the convolution. Defaults to 1.
+            padding (int, optional): Zero-padding size applied symmetrically to height and width. Defaults to 0.
+
+        Returns:
+            np.ndarray: Output tensor of shape (batch_size, out_channels, out_height, out_width),
+                       where out_height = floor((height + 2*padding - kernel_height) / stride) + 1,
+                       and out_width is computed similarly.
+
+        Raises:
+            AssertionError: If the number of input channels does not match the kernel's input channels.
+        """
+        B, C_in, H, W = input.shape
+        C_out, C_in_k, KH, KW = kernels.shape
+        assert C_in == C_in_k, "Input and kernel channel dimensions must match"
+
+        # Compute padded sizes
+        H_padded = H + 2 * padding
+        W_padded = W + 2 * padding
+        fft_H = H_padded + KH - 1
+        fft_W = W_padded + KW - 1
+
+        # Pad input
+        padded_input = np.zeros((B, C_in, fft_H, fft_W))
+        padded_input[:, :, padding:padding+H, padding:padding+W] = input
+
+        # Pad kernels
+        padded_kernels = np.zeros((C_out, C_in, fft_H, fft_W))
+        padded_kernels[:, :, :KH, :KW] = kernels
+
+        # Compute FFT
+        fft_input = np.fft.fft2(padded_input, axes=(2, 3))
+        fft_kernels = np.fft.fft2(padded_kernels, axes=(2, 3))
+
+        # Conjugate the kernel's FFT for cross-correlation
+        fft_kernels = np.conj(fft_kernels)
+
+        # Frequency domain multiplication
+        fft_output = np.einsum('bchw,ochw->bohw', fft_input, fft_kernels)
+
+        # Inverse FFT
+        output_full = np.fft.ifft2(fft_output, axes=(2, 3))
+
+        # Compute output size
+        m_H = H_padded - KH + 1
+        m_W = W_padded - KW + 1
+        out_H = (H + 2 * padding - KH) // stride + 1
+        out_W = (W + 2 * padding - KW) // stride + 1
+
+        # Crop to valid region
+        output_cropped = output_full[:, :, :m_H, :m_W]
+
+        # Apply stride
+        output = output_cropped[:, :, ::stride, ::stride][:, :, :out_H, :out_W]
+
+        # Return real part
+        return np.real(output)
