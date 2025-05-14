@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import time
-from core.operations import winograd_conv_layer
+from core.operations import WinogradConv
 import argparse
 
 
@@ -10,6 +10,7 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--thrs', type=float, default=1e-2, help='Threshold for the test case')
 
+winograd = WinogradConv()
 def test_winograd_conv_layer(thrs=1e-2):
     X = np.random.rand(1, 3, 224, 224)     
     W = np.random.rand(4, 3, 3, 3)     
@@ -24,7 +25,7 @@ def test_winograd_conv_layer(thrs=1e-2):
 
     
     start_time = time.time()
-    Y = winograd_conv_layer(X, W)
+    Y = winograd.convolve(X, W,1)
     end_time = time.time()
 
     

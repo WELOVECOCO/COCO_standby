@@ -668,105 +668,102 @@ class LayerNorm(Layer):
         return output
 
 
-class MultiHeadAttention(Layer):
-    """
-
-    look , nromally you have fixed weights for any input what is different about attention mechanism is that the weights are not fixed they are dynamic and depend on the input.
-    so its not like the model knows what is the relationship really between words are maybe this is an emergent feature of the model but it is litterally just dynamic weights per input
-    and multi head  (nheads) is just doing that n times with the same number of weights 
-    """
-    def __init__(self, dmodel, nheads=1, masked=False,encoder_decoder=False):
+class SelfAttention(Layer):
+    def __init__(self, dmodel):
         super().__init__()
+        self.scale = np.sqrt(dmodel)
+        self.softmax = Softmax()
+    
+    def forward(self, q, k, v, masked=False):
+        B, nheads, T, head_dim = q.shape
+
+        scores = (q @ k.transpose(0, 1, 3, 2)) / self.scale  # (B, nheads, T, T)
+
+        if masked:
+            mask = np.triu(np.ones((T, T), dtype=np.float32), k=1) * -1e10
+            scores += mask
+
+        weights = self.softmax(scores, axis=-1)  # (B, nheads, T, T)
+        out = weights @ v  # (B, nheads, T, head_dim)
+
+        self.cache = (q, k, v, weights)
+        return out
+
+    def backward(self, grad_out):
+        q, k, v, weights = self.cache
+        B, nheads, T, head_dim = q.shape
+
+        grad_weights = grad_out @ v.transpose(0, 1, 3, 2)  # (B, nheads, T, T)
+        grad_v = weights.transpose(0, 1, 3, 2) @ grad_out
+
+        grad_scores = weights * (grad_weights - (grad_weights * weights).sum(axis=-1, keepdims=True))
+        grad_scores /= self.scale
+
+        grad_q = grad_scores @ k
+        grad_k = grad_scores.transpose(0, 1, 3, 2) @ q
+
+        self.q.assign_grad(grad_q)
+        self.k.assign_grad(grad_k)
+        self.v.assign_grad(grad_v)
+
+
+
+
+class MultiHeadAttention(Layer):
+    def __init__(self, dmodel, nheads=1, masked=False, encoder_decoder=False):
+        super().__init__()
+        assert dmodel % nheads == 0, "dmodel must be divisible by nheads"
         self.dmodel = dmodel
         self.nheads = nheads
-        assert dmodel % nheads == 0, "dmodel must be divisible by nheads"
         self.head_dim = dmodel // nheads
-        self.attn_proj = Linear(dmodel, dmodel * 3, initialize_type='he')
-        self.out_proj = Linear(dmodel, dmodel, initialize_type='he')
+        self.attn_proj = Linear(dmodel, dmodel * 3, initialize_type='zero')
+        self.out_proj = Linear(dmodel, dmodel, initialize_type='zero')
         self.masked = masked
-        self.sftmax = Softmax()
         self.encoder_decoder = encoder_decoder
+        self.attn = SelfAttention(self.head_dim)  # Per-head scaled dot-product attention
 
     def __call__(self, x, **kwargs):
-        B, T, dmodel = x.shape
-        if self.encoder_decoder==False:
+        B, T, _ = x.shape
+        self.input = x
+
+        if not self.encoder_decoder:
             qkv = self.attn_proj(x).data  # (B, T, dmodel * 3)
-            q, k, v = np.split(qkv, 3, axis=2)  # Split into Q, K, V (B, T, dmodel)
-        
+            q, k, v = np.split(qkv, 3, axis=2)
         else:
-            q = kwargs['q']
-            k = kwargs['k']
-            v = kwargs['v']
-        
+            q, k, v = kwargs['q'], kwargs['k'], kwargs['v']
 
         # Reshape for multi-head attention
-        q = q.reshape(B, T, self.nheads, self.head_dim).transpose(0, 2, 1, 3)  # (B, nheads, T, head_dim)
-        k = k.reshape(B, T, self.nheads, self.head_dim).transpose(0, 2, 1, 3)  # (B, nheads, T, head_dim)
-        v = v.reshape(B, T, self.nheads, self.head_dim).transpose(0, 2, 1, 3)  # (B, nheads, T, head_dim)
-
-        # Compute attention scores
-        attn_scores = (q @ k.transpose(0, 1, 3, 2)) / np.sqrt(self.head_dim)  # (B, nheads, T, T)
-         
-        if self.masked:
-            mask = np.triu(np.ones((T, T), dtype=np.float32), k=1) * -1e10
-            attn_scores += mask
-
-        attn_weights = self.sftmax(attn_scores, axis=-1)  # (B, nheads, T, T)
-        attn_output = attn_weights @ v  # (B, nheads, T, head_dim)
-        # print("scores after softmax", attn_weights)
-        # Reshape back to original dimensions
-        attn_output = attn_output.transpose(0, 2, 1, 3).reshape(B, T, dmodel)  # (B, T, dmodel)
-        out = self.out_proj(Tensor(attn_output))  # (B, T, dmodel)
-        out.parents = [x]  
-        out._grad_fn = self.backward
-        # Cache for backward pass
-        self.input = x
+        def reshape(t): return t.reshape(B, T, self.nheads, self.head_dim).transpose(0, 2, 1, 3)
+        q, k, v = reshape(q), reshape(k), reshape(v)
         self.q, self.k, self.v = q, k, v
-        self.attn_weights = attn_weights
+
+        out = self.attn.forward(q, k, v, masked=self.masked)
+        out = out.transpose(0, 2, 1, 3).reshape(B, T, self.dmodel)
+        out = self.out_proj(Tensor(out))
+
+        out.parents = [x]
+        out._grad_fn = self.backward
         return out
 
     def backward(self, grad_out, **kwargs):
-        B, T, dmodel = grad_out.shape
+        B, T, _ = grad_out.shape
+        grad_attn_out = self.out_proj.backward(grad_out, ret_grad=True)
+        grad_attn_out = grad_attn_out.reshape(B, T, self.nheads, self.head_dim).transpose(0, 2, 1, 3)
 
-        # Backprop through output projection
-        grad_attn_output = self.out_proj.backward(grad_out, ret_grad=True)  # (B, T, dmodel)
+        grad_q, grad_k, grad_v = self.attn.backward(grad_attn_out)
 
-        # Reshape for multi-head attention
-        grad_attn_output = grad_attn_output.reshape(B, T, self.nheads, self.head_dim).transpose(0, 2, 1, 3)
+        # Reconstruct gradients to full shape
+        def restore(t): return t.transpose(0, 2, 1, 3).reshape(B, T, self.dmodel)
+        grad_q, grad_k, grad_v = restore(grad_q), restore(grad_k), restore(grad_v)
 
-        # Backprop through attention weights and values
-        grad_attn_weights = grad_attn_output @ self.v.transpose(0, 1, 3, 2)  # (B, nheads, T, T)
-
-        grad_v = self.attn_weights.transpose(0, 1, 3, 2) @ grad_attn_output  # (B, nheads, T, head_dim)
-
-        # Backprop through softmax
-        grad_attn_scores = self.attn_weights * (grad_attn_weights - (grad_attn_weights * self.attn_weights).sum(axis=-1, keepdims=True))
-
-        # Backprop through scaled dot-product
-        grad_q = grad_attn_scores @ self.k  # (B, nheads, T, head_dim)
-        grad_k = grad_attn_scores.transpose(0, 1, 3, 2) @ self.q  # (B, nheads, T, head_dim)
-
-        # Reshape gradients back to original dimensions
-        grad_q = grad_q.transpose(0, 2, 1, 3).reshape(B, T, dmodel)
-        grad_k = grad_k.transpose(0, 2, 1, 3).reshape(B, T, dmodel)
-        grad_v = grad_v.transpose(0, 2, 1, 3).reshape(B, T, dmodel)
-
-        if self.encoder_decoder==False:
-        # Combine gradients for Q, K, V
-            grad_qkv = np.concatenate([grad_q, grad_k, grad_v], axis=2)  # (B, T, dmodel * 3)
-
-            # Backprop through input projection
+        if not self.encoder_decoder:
+            grad_qkv = np.concatenate([grad_q, grad_k, grad_v], axis=2)
             grad_x = self.attn_proj.backward(grad_qkv, ret_grad=True)
-
-            # Assign gradient to input
             self.input.assign_grad(grad_x)
+            return grad_x if kwargs.get('ret_grad', False) else None
         else:
-            # Assign gradients to Q, K, V inputs
             self.q.assign_grad(grad_q)
             self.k.assign_grad(grad_k)
             self.v.assign_grad(grad_v)
-        return grad_x if kwargs.get('ret_grad', False) else None
-
-
-
+            return None
 

@@ -297,143 +297,164 @@ A z A.T
 
 '''
 
+class WinogradConv:
+    """
+    Implements the Winograd convolution algorithm for efficient 2D convolution.
 
+    This class provides methods to perform Winograd convolution using the F(2x2, 3x3) algorithm,
+    which reduces the number of multiplications required for convolution operations.
+
+    Example usage:
+        conv = WinogradConv()
+        output = conv.forward(input_data, kernels)
+
+    """
+
+    def __init__(self):
+        pass
 
 # --- Optimized Winograd Transformations ---
-def winograd_input_transform_manual(d):
-    assert d.shape == (4, 4), "Input must be 4x4"
-    temp = np.zeros_like(d)
-    temp[:, 0] = d[:, 0] - d[:, 2]
-    temp[:, 1] = d[:, 1] + d[:, 2]
-    temp[:, 2] = d[:, 2] - d[:, 1]
-    temp[:, 3] = d[:, 1] - d[:, 3]
+    def winograd_input_transform_manual(self, d):
+        assert d.shape == (4, 4), "Input must be 4x4"
+        temp = np.zeros_like(d)
+        temp[:, 0] = d[:, 0] - d[:, 2]
+        temp[:, 1] = d[:, 1] + d[:, 2]
+        temp[:, 2] = d[:, 2] - d[:, 1]
+        temp[:, 3] = d[:, 1] - d[:, 3]
 
-    V = np.zeros_like(d)
-    V[0, :] = temp[0, :] - temp[2, :]
-    V[1, :] = temp[1, :] + temp[2, :]
-    V[2, :] = temp[2, :] - temp[1, :]
-    V[3, :] = temp[1, :] - temp[3, :]
-    return V
+        V = np.zeros_like(d)
+        V[0, :] = temp[0, :] - temp[2, :]
+        V[1, :] = temp[1, :] + temp[2, :]
+        V[2, :] = temp[2, :] - temp[1, :]
+        V[3, :] = temp[1, :] - temp[3, :]
+        return V
 
-def winograd_kernel_transform_manual(k):
-    assert k.shape == (3, 3), "Kernel must be 3x3"
-    temp = np.zeros((4, 3), dtype=k.dtype)
-    temp[0, :] = k[0, :]
-    temp[3, :] = k[2, :]
-    col_sums = 0.5 * (k[0, :] + k[1, :] + k[2, :])
-    col_diffs = 0.5 * (k[0, :] - k[1, :] + k[2, :])
-    temp[1, :] = col_sums
-    temp[2, :] = col_diffs
+    def winograd_kernel_transform_manual(self,k):
+        assert k.shape == (3, 3), "Kernel must be 3x3"
+        temp = np.zeros((4, 3), dtype=k.dtype)
+        temp[0, :] = k[0, :]
+        temp[3, :] = k[2, :]
+        col_sums = 0.5 * (k[0, :] + k[1, :] + k[2, :])
+        col_diffs = 0.5 * (k[0, :] - k[1, :] + k[2, :])
+        temp[1, :] = col_sums
+        temp[2, :] = col_diffs
 
-    output = np.zeros((4, 4), dtype=k.dtype)
-    output[:, 0] = temp[:, 0]
-    output[:, 3] = temp[:, 2]
-    output[:, 1] = 0.5 * (temp[:, 0] + temp[:, 1] + temp[:, 2])
-    output[:, 2] = 0.5 * (temp[:, 0] - temp[:, 1] + temp[:, 2])
-    return output
+        output = np.zeros((4, 4), dtype=k.dtype)
+        output[:, 0] = temp[:, 0]
+        output[:, 3] = temp[:, 2]
+        output[:, 1] = 0.5 * (temp[:, 0] + temp[:, 1] + temp[:, 2])
+        output[:, 2] = 0.5 * (temp[:, 0] - temp[:, 1] + temp[:, 2])
+        return output
 
-def winograd_output_transform_manual(v):
-    m = np.zeros((4, 2), dtype=v.dtype)
-    m[:, 0] = v[:, 0] + v[:, 1] + v[:, 2]
-    m[:, 1] = v[:, 1] - v[:, 2] - v[:, 3]
+    def winograd_output_transform_manual(self,v):
+        m = np.zeros((4, 2), dtype=v.dtype)
+        m[:, 0] = v[:, 0] + v[:, 1] + v[:, 2]
+        m[:, 1] = v[:, 1] - v[:, 2] - v[:, 3]
 
-    o00 = m[0, 0] + m[1, 0] + m[2, 0]
-    o01 = m[0, 1] + m[1, 1] + m[2, 1]
-    o10 = m[1, 0] - m[2, 0] - m[3, 0]
-    o11 = m[1, 1] - m[2, 1] - m[3, 1]
-    return np.array([[o00, o01], [o10, o11]], dtype=v.dtype)
+        o00 = m[0, 0] + m[1, 0] + m[2, 0]
+        o01 = m[0, 1] + m[1, 1] + m[2, 1]
+        o10 = m[1, 0] - m[2, 0] - m[3, 0]
+        o11 = m[1, 1] - m[2, 1] - m[3, 1]
+        return np.array([[o00, o01], [o10, o11]], dtype=v.dtype)
 
-# --- Helper: Extract 4x4 Tiles with Stride 2 ---
-def extract_tiles(image, tile_size=4, stride=2):
-    #stride = 2 is used for f(2x2, 3x3) winograd conv to have a r-1 overlap
-    # image.shape = (C, H, W)
-    C, H, W = image.shape
-    num_h = (H - tile_size) // stride + 1
-    num_w = (W - tile_size) // stride + 1
+    # --- Helper: Extract 4x4 Tiles with Stride 2 ---
+    def extract_tiles(self,image, tile_size=4, stride=2):
+        #stride = 2 is used for f(2x2, 3x3) winograd conv to have a r-1 overlap
+        # image.shape = (C, H, W)
+        C, H, W = image.shape
+        num_h = (H - tile_size) // stride + 1
+        num_w = (W - tile_size) // stride + 1
 
-    shape = (C, num_h, num_w, tile_size, tile_size)
-    strides = image.strides[:-2] + (stride * image.strides[-2], stride * image.strides[-1]) + image.strides[-2:]
-    tiles = as_strided(image, shape=shape, strides=strides)
-    tiles = tiles.reshape(C, -1, tile_size, tile_size)
-    # tiles.shape = (C, num_tiles_h * num_tiles_w, 4, 4)
-    return tiles
+        shape = (C, num_h, num_w, tile_size, tile_size)
+        strides = image.strides[:-2] + (stride * image.strides[-2], stride * image.strides[-1]) + image.strides[-2:]
+        tiles = as_strided(image, shape=shape, strides=strides)
+        tiles = tiles.reshape(C, -1, tile_size, tile_size)
+        # tiles.shape = (C, num_tiles_h * num_tiles_w, 4, 4)
+        return tiles
 
-# --- Main Winograd Convolution Function ---
-def winograd_conv_layer(X, W):
-    """
-    Winograd convolution (F(2×2, 3×3)).
+    # --- Main Winograd Convolution Function ---
+    def convolve(self,X, W,stride=1, padding=0):
+        """
+        Winograd convolution (F(2×2, 3×3)).
 
-    X: input tensor, shape (N, C, H, W)
-    W: filter tensor, shape (K, C, 3, 3)
-    returns Y: output tensor, shape (N, K, H_out, W_out)
-    """
-    import numpy as np
+        X: input tensor, shape (N, C, H, W)
+        W: filter tensor, shape (K, C, 3, 3)
+        returns Y: output tensor, shape (N, K, H_out, W_out)
+        """
+        
 
-    # --- unpack shapes ---
-    N, C, H, W_x = X.shape       # N=batch size, C=channels, H×W_x=spatial dims
-    K, C_w, R, S = W.shape       # K=number of filters, C_w must match C, R=S=3
+        # --- unpack shapes ---
+        N, C, H, W_x = X.shape       # N=batch size, C=channels, H×W_x=spatial dims
+        K, C_w, R, S = W.shape       # K=number of filters, C_w must match C, R=S=3
 
-    # sanity checks
-    assert (R, S) == (3, 3), "Only 3×3 kernels supported"
-    assert C == C_w,           "Mismatch between input and filter channels"
+        # sanity checks
+        assert (R, S) == (3, 3), "Only 3×3 kernels supported"
+        assert C == C_w,           "Mismatch between input and filter channels"
+        assert H >= 4 and W_x >= 4, "Input must be at least 4x4"
+        assert H % 2 == 0 and W_x % 2 == 0, "Input height and width must be even"
+        assert stride == 1, "Stride must be 1 for Winograd convolution"
 
-    # Winograd tile settings:
-    m = 2                       # we want 2×2 output tiles
-    alpha = m + R - 1           # transform tile is 4×4 (since 2 + 3 - 1 = 4)
-    stride = m                  # move tiles by 2 pixels each time
+        if padding > 0:
+            
+            X = np.pad(X, ((0, 0), (0, 0), (padding, padding), (padding, padding)), mode='constant')
+        # Winograd tile settings:
 
-    # --- Step 1: transform all filters into Winograd domain ---
-    # U[k, c, i, j] will hold each filter’s channel-transformed 4×4 tile
-    U = np.empty((K, C, alpha, alpha), dtype=W.dtype)
-    for k in range(K):
-        for c in range(C):
-            # take the 3×3 weights for filter k, channel c
-            # apply G · W · Gᵀ to get a 4×4 Winograd-domain patch
-            U[k, c] = winograd_kernel_transform_manual(W[k, c])
+        m = 2                       # we want 2×2 output tiles
+        alpha = m + R - 1           # transform tile is 4×4 (since 2 + 3 - 1 = 4)
+        stride = 2                  # move tiles by 2 pixels each time
 
-    # figure out how many 4×4 tiles fit across height/width
-    n_tiles_h = (H - alpha) // stride + 1
-    n_tiles_w = (W_x - alpha) // stride + 1
-    P = n_tiles_h * n_tiles_w    # total number of tiles per image
+        # --- Step 1: transform all filters into Winograd domain ---
+        # U[k, c, i, j] will hold each filter’s channel-transformed 4×4 tile
+        U = np.empty((K, C, alpha, alpha), dtype=W.dtype)
+        for k in range(K):
+            for c in range(C):
+                # take the 3×3 weights for filter k, channel c
+                # apply G · W · Gᵀ to get a 4×4 Winograd-domain patch
+                U[k, c] = self.winograd_kernel_transform_manual(W[k, c])
 
-    # prepare the output array: each 2×2 tile will be placed back into spatial grid
-    Y = np.zeros((N, K, n_tiles_h * m, n_tiles_w * m), dtype=X.dtype)
+        # figure out how many 4×4 tiles fit across height/width
+        n_tiles_h = (H - alpha) // stride + 1
+        n_tiles_w = (W_x - alpha) // stride + 1
+        P = n_tiles_h * n_tiles_w    # total number of tiles per image
 
-    # --- Step 2: loop over each image in the batch ---
-    for n in range(N):
-        # slice out all overlapping 4×4 patches from each channel of image n
-        # result shape: (C, P, 4, 4)
-        tiles = extract_tiles(X[n], tile_size=alpha, stride=stride)
+        # prepare the output array: each 2×2 tile will be placed back into spatial grid
+        Y = np.zeros((N, K, n_tiles_h * m, n_tiles_w * m), dtype=X.dtype)
 
-        # transform each 4×4 input patch into Winograd domain: Bᵀ · d · B
-        V = np.empty((C, P, alpha, alpha), dtype=X.dtype)
-        for c in range(C):
+        # --- Step 2: loop over each image in the batch ---
+        for n in range(N):
+            # slice out all overlapping 4×4 patches from each channel of image n
+            # result shape: (C, P, 4, 4)
+            tiles = self.extract_tiles(X[n], tile_size=alpha, stride=stride)
+
+            # transform each 4×4 input patch into Winograd domain: Bᵀ · d · B
+            V = np.empty((C, P, alpha, alpha), dtype=X.dtype)
+            for c in range(C):
+                for p in range(P):
+                    V[c, p] = self.winograd_input_transform_manual(tiles[c, p])
+
+            # --- Step 3: perform the “convolution” as channel-wise GEMMs ---
+            # M[i, j, k, p] will hold the sum over channels for position (i,j)
+            M = np.empty((alpha, alpha, K, P), dtype=X.dtype)
+            for i in range(alpha):
+                for j in range(alpha):
+                    # build a (K × C) matrix: filters × channels at coord (i,j)
+                    U_slice = U[:, :, i, j]
+                    # build a (C × P) matrix: channels × tiles at coord (i,j)
+                    V_slice = V[:, :, i, j]
+                    # multiply to sum over C in one go → get (K × P) results
+                    M[i, j] = U_slice @ V_slice
+
+            # --- Step 4: invert the Winograd transform for each tile & filter ---
             for p in range(P):
-                V[c, p] = winograd_input_transform_manual(tiles[c, p])
+                # compute the top-left corner in output feature map
+                row = (p // n_tiles_w) * m
+                col = (p %  n_tiles_w) * m
+                for k in range(K):
+                    # M[:, :, k, p] is the 4×4 Winograd result for filter k, tile p
+                    # apply Aᵀ · M · A to get the final 2×2 output patch
+                    y_patch = self.winograd_output_transform_manual(M[:, :, k, p])
+                    # write that 2×2 patch back into Y
+                    Y[n, k, row:row + m, col:col + m] = y_patch
 
-        # --- Step 3: perform the “convolution” as channel-wise GEMMs ---
-        # M[i, j, k, p] will hold the sum over channels for position (i,j)
-        M = np.empty((alpha, alpha, K, P), dtype=X.dtype)
-        for i in range(alpha):
-            for j in range(alpha):
-                # build a (K × C) matrix: filters × channels at coord (i,j)
-                U_slice = U[:, :, i, j]
-                # build a (C × P) matrix: channels × tiles at coord (i,j)
-                V_slice = V[:, :, i, j]
-                # multiply to sum over C in one go → get (K × P) results
-                M[i, j] = U_slice @ V_slice
-
-        # --- Step 4: invert the Winograd transform for each tile & filter ---
-        for p in range(P):
-            # compute the top-left corner in output feature map
-            row = (p // n_tiles_w) * m
-            col = (p %  n_tiles_w) * m
-            for k in range(K):
-                # M[:, :, k, p] is the 4×4 Winograd result for filter k, tile p
-                # apply Aᵀ · M · A to get the final 2×2 output patch
-                y_patch = winograd_output_transform_manual(M[:, :, k, p])
-                # write that 2×2 patch back into Y
-                Y[n, k, row:row + m, col:col + m] = y_patch
-
-    return Y
+        return Y
 
