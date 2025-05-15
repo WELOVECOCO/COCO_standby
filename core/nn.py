@@ -1,6 +1,6 @@
 import numpy as np
-from core.operations import FastConvolver
 from numpy.lib.stride_tricks import sliding_window_view
+from core.operations import *
 from core.tensor import Tensor
 from core.Function import *
 
@@ -249,7 +249,16 @@ class Conv2d(Layer):
         self.activation = get_activation(activation, dropout) if activation != "none" else None
 
         # Convolution operation utility
-        self.convolver = FastConvolver()
+        if kernel_size == 3 and stride == 1:
+            self.convolver = WinogradConv()
+            self.engine = "wino"
+        elif kernel_size >= 7:
+            self.convolver = FFTConvolver()
+            self.engine = "fft"
+        else:
+            self.convolver = FastConvolver()
+            self.engine = "im2col"
+
 
         # Shape of the weight tensor (filters)
         self.kernels_shape = (output_channels, input_channels, kernel_size, kernel_size)
@@ -322,7 +331,13 @@ class Conv2d(Layer):
         # print(type(input))
         # print(type(self.weights.data))
         self.input = input
-        output, self.col_matrix = self.convolver.convolve(self.input.data, self.weights.data, stride=self.stride, padding=self.padding)
+
+        if self.engine == "im2col":
+            output, self.col_matrix = self.convolver.convolve(self.input.data, self.weights.data, stride=self.stride, padding=self.padding)
+        else:
+            output = self.convolver.convolve(self.input.data, self.weights.data, stride=self.stride, padding= self.padding)
+            self.col_matrix = None
+
         if self.bias_flag:
             bias_reshaped = self.bias.data.reshape(1, self.output_channels, 1, 1)
             output = output + bias_reshaped
@@ -339,54 +354,93 @@ class Conv2d(Layer):
     def backward(self, grad, **kwargs):
         """
         Computes the backward pass of the convolution operation.
-        
+
         Args:
             grad (np.ndarray): Gradient of the loss with respect to the output tensor.
-        
+
         Returns:
             np.ndarray: Gradient of the loss with respect to the input tensor.
         """
         B, F, H_out, W_out = self.output.data.shape
         grad = self.activation.grad_fn(grad) if self.activation is not None else grad
-        # Gradient wrt biases
-        # grad = grad.reshape(self.output.shape)
+
+        # ----- bias grad -----
         if self.bias_flag:
-            dbias = np.sum(grad, axis=(0, 2, 3), keepdims=False)
+            dbias = np.sum(grad, axis=(0, 2, 3))
             self.bias.assign_grad(dbias)
-        # assert self.bias.grad.shape == self.bias.shape
-        
-        # Gradient wrt weights
-        grad_reshaped = grad.transpose(1, 0, 2, 3).reshape(self.output_channels, -1)  # Shape: (F, B * H_out * W_out)
-        grad_kernel_matrix = grad_reshaped @ self.col_matrix  # Use cached `col_matrix`
-        dkernel = grad_kernel_matrix.reshape(self.output_channels, self.input_channels, self.kernel_size, self.kernel_size)
-        self.weights.assign_grad(dkernel)
-        # assert self.grad_w.shape == self.weights.shape
-        
-        # Gradient wrt input
-        kernel_matrix = self.weights.data.reshape(self.output_channels, -1).T  # Shape: (C*k*k, F)
-        dout_matrix = grad.transpose(0, 2, 3, 1).reshape(B * H_out * W_out, F)
-        dX_col = dout_matrix @ kernel_matrix.T
 
-        # Use col2im_accumulation to fold dX_col back to the padded input shape.
-        dInput_padded = self.convolver.col2im_accumulation(
-            dX_col=dX_col,
-            input_shape=self.input.data.shape, 
-            filter_height=self.kernel_size,
-            filter_width=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding
-        )
-        
-        # Remove the padding to recover gradient w.r.t. the original input.
-        if self.padding > 0:
-            dInput = dInput_padded[:, :, self.padding:-self.padding, self.padding:-self.padding]
+        # ----- im2col engine-----
+        if self.engine == "im2col":
+            # grad wrt weights via cached col_matrix
+            grad_reshaped = grad.transpose(1, 0, 2, 3).reshape(F, -1)
+            grad_kernel_matrix = grad_reshaped @ self.col_matrix
+            dkernel = grad_kernel_matrix.reshape(
+                self.output_channels,
+                self.input_channels,
+                self.kernel_size,
+                self.kernel_size
+            )
+            self.weights.assign_grad(dkernel)
+
+            # grad wrt input via col2im_accumulation
+            kernel_matrix = self.weights.data.reshape(F, -1).T
+            dout_matrix = grad.transpose(0, 2, 3, 1).reshape(B * H_out * W_out, F)
+            dX_col = dout_matrix @ kernel_matrix.T
+            dInput_padded = self.convolver.col2im_accumulation(
+                dX_col=dX_col,
+                input_shape=self.input.data.shape,
+                filter_height=self.kernel_size,
+                filter_width=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding
+            )
+            if self.padding > 0:
+                dInput = dInput_padded[:, :,
+                         self.padding:-self.padding,
+                         self.padding:-self.padding]
+            else:
+                dInput = dInput_padded
+
+        # ----- fft or wino engine -----
         else:
-            dInput = dInput_padded
+            # 1) grad w.r.t. input: cross-corr with 180°-rotated kernel
+            W180 = np.flip(self.weights.data, axis=(2, 3))
+            pad_full = self.kernel_size - 1
+            dX_full = self.convolver.convolve(
+                grad,
+                W180,
+                stride=1,
+                padding=pad_full
+            )
+            # crop back to original input size
+            H, W = self.input.data.shape[-2:]
+            dInput = dX_full[:, :,
+                     pad_full:pad_full + H,
+                     pad_full:pad_full + W]
 
-        self.input.assign_grad(dInput) 
-        ret_grad = kwargs['ret_grad'] if 'ret_grad' in kwargs else False
-        return dInput if ret_grad else None
-        # assert dInput.shape == self.input.shape
+            # 2) grad w.r.t. kernels: correlate input with grad, then rotate back
+            dW_corr = self.convolver.convolve(
+                self.input.data,
+                grad,
+                stride=1,
+                padding=self.padding
+            )
+            dkernel = np.flip(dW_corr, axis=(2, 3))
+            # ensure shape is exactly (F, C, KH, KW)
+            dkernel = dkernel.reshape(
+                self.output_channels,
+                self.input_channels,
+                self.kernel_size,
+                self.kernel_size
+            )
+            self.weights.assign_grad(dkernel)
+
+        # write input grad
+        self.input.assign_grad(dInput)
+
+        # return if requested
+        return dInput if kwargs.get('ret_grad', False) else None
+
 
 class MaxPool2d(Module):
     """
