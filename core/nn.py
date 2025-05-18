@@ -367,6 +367,7 @@ class Conv2d(Layer):
         Returns:
             np.ndarray: Gradient of the loss with respect to the input tensor.
         """
+        #TODO: the gradient wrt the weights is convolve(input, grad) || and the gradient wrt the input is transposedconv2d(grad, weights.fliped)
         B, F, H_out, W_out = self.output.data.shape
         grad = self.activation.grad_fn(grad) if self.activation is not None else grad
         
