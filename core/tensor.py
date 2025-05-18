@@ -54,7 +54,7 @@ class Tensor:
 
         if grad is None:
             # if scalar loss, the default grad is 1.
-            grad = np.ones_like(self.parents[0].data)
+            grad = np.ones_like(self.data)
 
         self.assign_grad(grad)
         # Get nodes in topological order so that we call each node’s backward function only after its dependents.

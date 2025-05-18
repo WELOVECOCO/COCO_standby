@@ -25,7 +25,7 @@ def test_winograd_conv_layer(thrs=1e-2):
 
     
     start_time = time.time()
-    Y = winograd.convolve(X, W,1)
+    Y,_ = winograd.convolve(X, W,1)
     end_time = time.time()
 
     
@@ -45,6 +45,5 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-
     
     test_winograd_conv_layer(thrs=args.thrs)

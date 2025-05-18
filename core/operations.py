@@ -23,7 +23,8 @@ class FastConvolver:
     def __init__(self):
         pass
 
-    def _im2col(self, input_data, kernel_shape, stride=1):
+    @staticmethod
+    def _im2col(input_data, kernel_shape, stride=1):
         """
                 Converts an input batch into a columnized matrix for efficient convolution.
 
@@ -189,7 +190,7 @@ class FastConvolver:
         )
 
         # Convert the padded input into columns
-        col_matrix = self._im2col(padded_input, kernel_shape=(C, H_k, W_k), stride=stride)
+        col_matrix = FastConvolver._im2col(padded_input, kernel_shape=(C, H_k, W_k), stride=stride)
 
         # Transform kernels into a matrix for multiplication
         kernel_matrix = self._transform_kernels(kernels)
@@ -372,90 +373,84 @@ class WinogradConv:
         return tiles
 
     # --- Main Winograd Convolution Function ---
-    def convolve(self,X, W,stride=1, padding=0):
+    def convolve(self, X, W, stride=1, padding=0):
         """
         Winograd convolution (F(2×2, 3×3)).
 
         X: input tensor, shape (N, C, H, W)
         W: filter tensor, shape (K, C, 3, 3)
-        returns Y: output tensor, shape (N, K, H_out, W_out)
+        Returns:
+            Y: output tensor, shape (N, K, H_out, W_out)
         """
-        
+        import numpy as np
 
-        # --- unpack shapes ---
-        N, C, H, W_x = X.shape       # N=batch size, C=channels, H×W_x=spatial dims
-        K, C_w, R, S = W.shape       # K=number of filters, C_w must match C, R=S=3
+        # --- unpack initial input shapes ---
+        N, C, H, W_x = X.shape
+        K, C_w, R, S = W.shape
 
-        # sanity checks
+        # Sanity checks
         assert (R, S) == (3, 3), "Only 3×3 kernels supported"
-        assert C == C_w,           "Mismatch between input and filter channels"
-        assert H >= 4 and W_x >= 4, "Input must be at least 4x4"
-        assert H % 2 == 0 and W_x % 2 == 0, "Input height and width must be even"
+        assert C == C_w, "Mismatch between input and filter channels"
         assert stride == 1, "Stride must be 1 for Winograd convolution"
 
+        # Apply padding BEFORE using spatial dims
         if padding > 0:
-            
             X = np.pad(X, ((0, 0), (0, 0), (padding, padding), (padding, padding)), mode='constant')
-        # Winograd tile settings:
 
-        m = 2                       # we want 2×2 output tiles
-        alpha = m + R - 1           # transform tile is 4×4 (since 2 + 3 - 1 = 4)
-        stride = 2                  # move tiles by 2 pixels each time
+        # Update dimensions after padding
+        _, _, H_padded, W_padded = X.shape
 
-        # --- Step 1: transform all filters into Winograd domain ---
-        # U[k, c, i, j] will hold each filter’s channel-transformed 4×4 tile
+        assert H_padded >= 4 and W_padded >= 4, "Input must be at least 4x4 after padding"
+        assert H_padded % 2 == 0 and W_padded % 2 == 0, "Input height and width must be even after padding"
+
+        col_matrix = FastConvolver._im2col(X, kernel_shape=(C, R, S), stride=stride)
+        # Winograd settings
+        m = 2                     # output tile size
+        alpha = m + R - 1         # 4×4 transform size
+        stride = 2                # tile stride in Winograd is always 2
+
+        # --- Step 1: Transform filters ---
         U = np.empty((K, C, alpha, alpha), dtype=W.dtype)
         for k in range(K):
             for c in range(C):
-                # take the 3×3 weights for filter k, channel c
-                # apply G · W · Gᵀ to get a 4×4 Winograd-domain patch
                 U[k, c] = self.winograd_kernel_transform_manual(W[k, c])
 
-        # figure out how many 4×4 tiles fit across height/width
-        n_tiles_h = (H - alpha) // stride + 1
-        n_tiles_w = (W_x - alpha) // stride + 1
-        P = n_tiles_h * n_tiles_w    # total number of tiles per image
+        # --- Step 2: Calculate number of tiles ---
+        n_tiles_h = (H_padded - alpha) // stride + 1
+        n_tiles_w = (W_padded - alpha) // stride + 1
+        P = n_tiles_h * n_tiles_w  # tiles per image
 
-        # prepare the output array: each 2×2 tile will be placed back into spatial grid
+        # Output tensor
         Y = np.zeros((N, K, n_tiles_h * m, n_tiles_w * m), dtype=X.dtype)
 
-        # --- Step 2: loop over each image in the batch ---
+        # --- Step 3: Process each image ---
         for n in range(N):
-            # slice out all overlapping 4×4 patches from each channel of image n
-            # result shape: (C, P, 4, 4)
-            tiles = self.extract_tiles(X[n], tile_size=alpha, stride=stride)
+            tiles = self.extract_tiles(X[n], tile_size=alpha, stride=stride)  # (C, P, 4, 4)
 
-            # transform each 4×4 input patch into Winograd domain: Bᵀ · d · B
+            # Transform input tiles
             V = np.empty((C, P, alpha, alpha), dtype=X.dtype)
             for c in range(C):
                 for p in range(P):
                     V[c, p] = self.winograd_input_transform_manual(tiles[c, p])
 
-            # --- Step 3: perform the “convolution” as channel-wise GEMMs ---
-            # M[i, j, k, p] will hold the sum over channels for position (i,j)
+            # --- Step 4: Element-wise multiplication and accumulation ---
             M = np.empty((alpha, alpha, K, P), dtype=X.dtype)
             for i in range(alpha):
                 for j in range(alpha):
-                    # build a (K × C) matrix: filters × channels at coord (i,j)
-                    U_slice = U[:, :, i, j]
-                    # build a (C × P) matrix: channels × tiles at coord (i,j)
-                    V_slice = V[:, :, i, j]
-                    # multiply to sum over C in one go → get (K × P) results
-                    M[i, j] = U_slice @ V_slice
+                    U_slice = U[:, :, i, j]         # (K, C)
+                    V_slice = V[:, :, i, j]         # (C, P)
+                    M[i, j] = U_slice @ V_slice     # (K, P)
 
-            # --- Step 4: invert the Winograd transform for each tile & filter ---
+            # --- Step 5: Inverse transform and construct output ---
             for p in range(P):
-                # compute the top-left corner in output feature map
                 row = (p // n_tiles_w) * m
                 col = (p %  n_tiles_w) * m
                 for k in range(K):
-                    # M[:, :, k, p] is the 4×4 Winograd result for filter k, tile p
-                    # apply Aᵀ · M · A to get the final 2×2 output patch
                     y_patch = self.winograd_output_transform_manual(M[:, :, k, p])
-                    # write that 2×2 patch back into Y
                     Y[n, k, row:row + m, col:col + m] = y_patch
 
-        return Y
+        return Y,col_matrix
+
 
 ###########################################################################################
 ##
@@ -490,7 +485,7 @@ class FFTConvolver:
         """
         B, C_in, H, W = input.shape
         C_out, C_in_k, KH, KW = kernels.shape
-        assert C_in == C_in_k, "Input and kernel channel dimensions must match"
+        # assert C_in == C_in_k, f"Input and kernel channel dimensions must match input = {input.shape} != kernels = {kernels.shape}"
 
         # Compute padded sizes
         H_padded = H + 2 * padding
@@ -502,6 +497,7 @@ class FFTConvolver:
         padded_input = np.zeros((B, C_in, fft_H, fft_W))
         padded_input[:, :, padding:padding+H, padding:padding+W] = input
 
+        col_matrix = FastConvolver._im2col(padded_input, kernel_shape=(C_in_k, KH, KW), stride=stride)
         # Pad kernels
         padded_kernels = np.zeros((C_out, C_in, fft_H, fft_W))
         padded_kernels[:, :, :KH, :KW] = kernels
@@ -532,4 +528,71 @@ class FFTConvolver:
         output = output_cropped[:, :, ::stride, ::stride][:, :, :out_H, :out_W]
 
         # Return real part
-        return np.real(output)
+        return np.real(output), col_matrix
+    
+
+    def conv_transpose2d(self, input, kernels, stride=1, padding=0):
+        """
+        Performs 2D transposed convolution using FFT.
+        
+        Args:
+            input (np.ndarray): Input tensor of shape (B, C_in, H, W)
+            kernels (np.ndarray): Kernel tensor of shape (C_out, C_in, KH, KW)
+            stride (int): Stride used in the forward convolution
+            padding (int): Padding used in the forward convolution
+
+        Returns:
+            np.ndarray: Output tensor of shape (B, C_out, H_out, W_out)
+        """
+        B, C_in, H, W = input.shape
+        C_out, C_in_k, KH, KW = kernels.shape
+        assert C_in == C_in_k, "Input channels and kernel channels must match"
+
+        # Flip kernels spatially and swap in/out channels for transpose conv
+        # W_flipped shape: (C_in, C_out, KH, KW)
+        W_flipped = kernels[:, :, ::-1, ::-1].swapaxes(0, 1)
+
+        # Calculate output spatial size for transposed conv (full conv)
+        # Forward conv output size: 
+        # H_out_fwd = floor((H + 2*padding - KH)/stride) + 1
+        # Transposed conv output size:
+        H_out = (H - 1) * stride - 2 * padding + KH
+        W_out = (W - 1) * stride - 2 * padding + KW
+
+        # Compute padded sizes for FFT (full convolution)
+        fft_H = H + KH - 1 + (H - 1) * (stride - 1)
+        fft_W = W + KW - 1 + (W - 1) * (stride - 1)
+
+        # Step 1: Upsample input by inserting zeros if stride > 1
+        if stride > 1:
+            # Create zero-inserted input array
+            H_up = H + (H - 1) * (stride - 1)
+            W_up = W + (W - 1) * (stride - 1)
+            upsampled_input = np.zeros((B, C_in, H_up, W_up), dtype=input.dtype)
+            upsampled_input[:, :, ::stride, ::stride] = input
+        else:
+            upsampled_input = input
+
+        # Step 2: Zero-pad input and kernels to fft size
+        padded_input = np.zeros((B, C_in, fft_H, fft_W), dtype=np.complex64)
+        padded_input[:, :, :upsampled_input.shape[2], :upsampled_input.shape[3]] = upsampled_input
+
+        padded_kernels = np.zeros((C_in, C_out, fft_H, fft_W), dtype=np.complex64)
+        padded_kernels[:, :, :KH, :KW] = W_flipped
+
+        # Step 3: FFT
+        fft_input = np.fft.fft2(padded_input, axes=(2, 3))
+        fft_kernels = np.fft.fft2(padded_kernels, axes=(2, 3))
+
+        # Step 4: Multiply in frequency domain and sum over channels
+        # einsum over: batch b, in_channel c_in, out_channel c_out, H, W
+        fft_output = np.einsum('bchw, chpw->bphw', fft_input, fft_kernels)
+
+
+        # Step 5: Inverse FFT to get spatial output
+        output_full = np.fft.ifft2(fft_output, axes=(2, 3)).real
+
+        # Step 6: Crop output to exact output size
+        output = output_full[:, :, :H_out, :W_out]
+
+        return output.astype(input.dtype)

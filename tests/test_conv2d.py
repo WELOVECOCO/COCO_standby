@@ -52,4 +52,4 @@ for kernel_size in (3, 5, 7):
     print(f"  Forward max abs diff: {diff_fwd:.2e}")
     assert diff_fwd < tolerance, f"Forward mismatch for kernel {kernel_size}"
 
-print("✅ All kernel sizes passed!")
+print("all test cases passed ✅ ✅ ✅ ")
