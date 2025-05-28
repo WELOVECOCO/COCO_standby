@@ -81,6 +81,7 @@ class Tanh(Activation):
             out_data = Tensor(out_data, requires_grad=x.requires_grad)
             out_data.parents = [x]
             out_data._grad_fn = self.grad_fn
+            out_data.op_name = "tanh"
             if Config.TEST == False:
                 out_data = self.apply_dropout(out_data)
             self.output = out_data  # store for use in grad_fn
@@ -128,6 +129,7 @@ class Sigmoid(Activation):
             out_data = Tensor(out_data, requires_grad=x.requires_grad)
             out_data.parents = [x]
             out_data._grad_fn = self.grad_fn
+            out_data.op_name = "sigmoid"
             # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
             if Config.TEST == False:
                 out_data = self.apply_dropout(out_data)
@@ -190,6 +192,7 @@ class Softmax(Activation):
             self.output = Tensor(out_data, requires_grad=x.requires_grad)
             self.output.parents = [x]
             self.output._grad_fn = self.grad_fn
+            self.output.op_name = "tanh"
             return self.output
         else:
             self.fused = True
@@ -238,6 +241,7 @@ class Relu(Activation):
             out_data = Tensor(out_data, requires_grad=x.requires_grad)
             out_data.parents = [x]
             out_data._grad_fn = self.grad_fn
+            out_data.op_name = "relu"
             # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
             if Config.TEST == False:
                 out_data = self.apply_dropout(out_data)
@@ -299,6 +303,7 @@ class LeakyReLU(Activation):
             out_data = Tensor(out_data, requires_grad=x.requires_grad)
             out_data.parents = [x]
             out_data._grad_fn = self.grad_fn
+            out_data.op_name = "leaky_relu"
             # Apply dropout if specified. Make sure apply_dropout returns a Tensor.
             if Config.TEST == False:
                 out_data = self.apply_dropout(out_data)

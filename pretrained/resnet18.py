@@ -1,6 +1,56 @@
 from core.nn import Conv2d, MaxPool2d, Linear, Relu, batchnorm2d, GAP , Flatten
 from core.Models import Model
-
+import numpy as np
+# class BasicBlock(Model):
+#     expansion = 1
+    
+#     def __init__(self, in_channels, out_channels, stride=1, downsample=None):
+#         super().__init__()
+#         # First conv layer
+#         self.conv1 = Conv2d(
+#             input_channels=in_channels,
+#             output_channels=out_channels,
+#             kernel_size=3,
+#             stride=stride,
+#             padding=1,
+#             initialize_type='zero',
+#             bias=False
+#         )
+#         self.bn1 = batchnorm2d(out_channels)
+#         self.relu = Relu()
+        
+#         # Second conv layer
+#         self.conv2 = Conv2d(
+#             input_channels=out_channels,
+#             output_channels=out_channels,
+#             kernel_size=3,
+#             stride=1,
+#             padding=1,
+#             initialize_type='zero',
+#             bias=False
+            
+#         )
+#         self.bn2 = batchnorm2d(out_channels)
+        
+#         self.downsample = downsample
+        
+#     def forward(self, x):
+#         identity = x
+        
+#         out = self.conv1(x)
+#         out = self.bn1(out)
+#         out = self.relu(out)
+        
+#         out = self.conv2(out)
+#         out = self.bn2(out)
+        
+#         if self.downsample is not None:
+#             identity = self.downsample(x)
+            
+#         out += identity
+#         out = self.relu(out)
+        
+#         return out
 class BasicBlock(Model):
     expansion = 1
     
@@ -33,6 +83,7 @@ class BasicBlock(Model):
         self.bn2 = batchnorm2d(out_channels)
         
         self.downsample = downsample
+        self.stride = stride
         
     def forward(self, x):
         identity = x
@@ -46,8 +97,28 @@ class BasicBlock(Model):
         
         if self.downsample is not None:
             identity = self.downsample(x)
-            
-        out += identity
+        
+        # Ensure shapes match before addition
+        # Get the shapes
+        out_shape = out.data.shape
+        identity_shape = identity.data.shape
+        
+        # If shapes don't match, make them match
+        if out_shape[2] != identity_shape[2] or out_shape[3] != identity_shape[3]:
+            # Resize identity or out to match
+            if out_shape[2] > identity_shape[2] or out_shape[3] > identity_shape[3]:
+                # Pad identity
+                pad_h = max(0, out_shape[2] - identity_shape[2])
+                pad_w = max(0, out_shape[3] - identity_shape[3])
+                if pad_h > 0 or pad_w > 0:
+                    identity.data = np.pad(identity.data, 
+                                          ((0, 0), (0, 0), (0, pad_h), (0, pad_w)), 
+                                          mode='constant')
+            else:
+                # Crop out
+                out.data = out.data[:, :, :identity_shape[2], :identity_shape[3]]
+        
+        out.data = out.data + identity.data
         out = self.relu(out)
         
         return out

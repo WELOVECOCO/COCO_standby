@@ -29,7 +29,7 @@ class Layer(Module):
     
     def __call__(self, input,**kwargs):
         pass
-
+                                                #
     def backward(self,grad):
         pass
 
@@ -62,6 +62,7 @@ class Flatten(Module):
 
         self.output = Tensor(flattened_data, requires_grad=True)
         self.output._grad_fn = self.backward
+        self.output.op_name = "Flatten"  # Set operation name for autograd
         self.output.parents = [self.input]
         return self.output
 
@@ -117,7 +118,7 @@ class Linear(Layer):
             return [self.weights,self.bias]
         else:
             return [self.weights]
-    def set_parameters(self,weights,bias):
+    def set_parameters(self,weights,bias):           
         self.weights = weights
         self.bias = bias
     def initialize_weights(self,input_dim, output_dim, initialize_type="he"):   
@@ -190,6 +191,7 @@ class Linear(Layer):
 
         self.output = Tensor(out, requires_grad=True)
         self.output._grad_fn = self.backward
+        self.output.op_name = "Linear"  # Set operation name for autograd
         self.output.parents = [self.input]  # Set backward function for autograd
         return self.output
 
@@ -250,7 +252,7 @@ class Conv2d(Layer):
         self.padding = padding
         self.activation = get_activation(activation, dropout) if activation != "none" else None
 
-        if kernel_size ==3 and stride == 1:
+        if kernel_size ==3 and stride == 1: 
             self.engine = "winograd"
 
         elif kernel_size >=7:
@@ -269,6 +271,8 @@ class Conv2d(Layer):
 
         elif self.engine == "winograd":
             self.convolver = WinogradConv()
+
+        # self.convolver = FastConvolver()
 
         self.back_convolver = FastConvolver()
 
@@ -353,6 +357,7 @@ class Conv2d(Layer):
             output = self.activation(output)
         self.output = Tensor(output,requires_grad=True)
         self.output._grad_fn = self.backward 
+        self.output.op_name = "conv2d"
         self.output.parents = [self.input]
 
         return self.output
@@ -479,6 +484,7 @@ class MaxPool2d(Module):
 
         self.output = Tensor(output,requires_grad=True)
         self.output._grad_fn = self.backward
+        self.output.op_name = "maxpool2d"
         self.output.parents = [self.input]
         return self.output
 
@@ -584,6 +590,7 @@ class batchnorm2d(Layer):
             output = self.weights.data * self.input_normalized + self.bias.data
             self.output = Tensor(output, requires_grad=True)
             self.output._grad_fn = self.backward
+            self.output.op_name = "batchnorm2d"
             self.output.parents = [self.input]
             return self.output
         else:
@@ -626,6 +633,7 @@ class GAP(Module):
         output = np.mean(self.input.data, axis=(2, 3),keepdims=False)
         self.output = Tensor(output, requires_grad=True)
         self.output._grad_fn = self.backward
+        self.output.op_name = "GAP"
         self.output.parents = [self.input]
         return self.output
     
@@ -671,6 +679,7 @@ class PatchEmbedding(Layer):
         B = x.shape[0]
         x = x.reshape(B, x.shape[1], -1)  # (B, E, N)
         x = x.transpose(0, 2, 1)  # (B, N, E)
+
         return x
 
 class PositionalEmbedding(Layer):
@@ -705,9 +714,10 @@ class SelfAttention(Layer):
         super().__init__()
         self.scale = np.sqrt(dmodel)
         self.softmax = Softmax()
-        self.q = None
-        self.k = None
-        self.v = None
+        self.q = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
+        self.k = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
+        self.v = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
+
     
     def forward(self, q, k, v, masked=False):
         B, nheads, T, head_dim = q.shape
@@ -724,7 +734,7 @@ class SelfAttention(Layer):
         self.cache = (q, k, v, weights)
         return out
 
-    def backward(self, grad_out):
+    def backward(self, grad_out, **kwargs):
         q, k, v, weights = self.cache
         B, nheads, T, head_dim = q.shape
 
@@ -740,6 +750,8 @@ class SelfAttention(Layer):
         self.q.assign_grad(grad_q)
         self.k.assign_grad(grad_k)
         self.v.assign_grad(grad_v)
+        if kwargs.get('ret_grad', False):
+            return grad_q, grad_k, grad_v
 
 
 
@@ -756,10 +768,9 @@ class MultiHeadAttention(Layer):
         self.masked = masked
         self.encoder_decoder = encoder_decoder
         self.attn = SelfAttention(self.head_dim)  # Per-head scaled dot-product attention
-        self.q = None
-        self.k = None
-        self.v = None
-
+        self.q = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
+        self.k = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
+        self.v = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
     def __call__(self, x, **kwargs):
         B, T, _ = x.shape
         self.input = x
@@ -788,7 +799,7 @@ class MultiHeadAttention(Layer):
         grad_attn_out = self.out_proj.backward(grad_out, ret_grad=True)
         grad_attn_out = grad_attn_out.reshape(B, T, self.nheads, self.head_dim).transpose(0, 2, 1, 3)
 
-        grad_q, grad_k, grad_v = self.attn.backward(grad_attn_out)
+        grad_q, grad_k, grad_v = self.attn.backward(grad_attn_out,ret_grad=True)
 
         # Reconstruct gradients to full shape
         def restore(t): return t.transpose(0, 2, 1, 3).reshape(B, T, self.dmodel)

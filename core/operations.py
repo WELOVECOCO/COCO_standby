@@ -376,63 +376,75 @@ class WinogradConv:
     def convolve(self, X, W, stride=1, padding=0):
         """
         Winograd convolution (F(2×2, 3×3)).
-
+        
         X: input tensor, shape (N, C, H, W)
         W: filter tensor, shape (K, C, 3, 3)
         Returns:
             Y: output tensor, shape (N, K, H_out, W_out)
+            col_matrix: column matrix for gradient computation
         """
-        import numpy as np
-
+        
         # --- unpack initial input shapes ---
         N, C, H, W_x = X.shape
         K, C_w, R, S = W.shape
-
+        
         # Sanity checks
         assert (R, S) == (3, 3), "Only 3×3 kernels supported"
         assert C == C_w, "Mismatch between input and filter channels"
         assert stride == 1, "Stride must be 1 for Winograd convolution"
-
+        
         # Apply padding BEFORE using spatial dims
         if padding > 0:
             X = np.pad(X, ((0, 0), (0, 0), (padding, padding), (padding, padding)), mode='constant')
-
+        
         # Update dimensions after padding
         _, _, H_padded, W_padded = X.shape
-
+        
         assert H_padded >= 4 and W_padded >= 4, "Input must be at least 4x4 after padding"
+        
+        # Fix for odd dimensions: add extra padding if needed
+        if H_padded % 2 != 0:
+            X = np.pad(X, ((0, 0), (0, 0), (0, 1), (0, 0)), mode='constant')
+            H_padded += 1
+        
+        if W_padded % 2 != 0:
+            X = np.pad(X, ((0, 0), (0, 0), (0, 0), (0, 1)), mode='constant')
+            W_padded += 1
+        
+        # Now we can safely assert that dimensions are even
         assert H_padded % 2 == 0 and W_padded % 2 == 0, "Input height and width must be even after padding"
-
+        
         col_matrix = FastConvolver._im2col(X, kernel_shape=(C, R, S), stride=stride)
+        
         # Winograd settings
         m = 2                     # output tile size
         alpha = m + R - 1         # 4×4 transform size
         stride = 2                # tile stride in Winograd is always 2
-
+        
         # --- Step 1: Transform filters ---
         U = np.empty((K, C, alpha, alpha), dtype=W.dtype)
         for k in range(K):
             for c in range(C):
                 U[k, c] = self.winograd_kernel_transform_manual(W[k, c])
-
+        
         # --- Step 2: Calculate number of tiles ---
         n_tiles_h = (H_padded - alpha) // stride + 1
         n_tiles_w = (W_padded - alpha) // stride + 1
         P = n_tiles_h * n_tiles_w  # tiles per image
-
+        
         # Output tensor
         Y = np.zeros((N, K, n_tiles_h * m, n_tiles_w * m), dtype=X.dtype)
-
+        
         # --- Step 3: Process each image ---
         for n in range(N):
             tiles = self.extract_tiles(X[n], tile_size=alpha, stride=stride)  # (C, P, 4, 4)
-
+            
             # Transform input tiles
             V = np.empty((C, P, alpha, alpha), dtype=X.dtype)
             for c in range(C):
                 for p in range(P):
                     V[c, p] = self.winograd_input_transform_manual(tiles[c, p])
-
+            
             # --- Step 4: Element-wise multiplication and accumulation ---
             M = np.empty((alpha, alpha, K, P), dtype=X.dtype)
             for i in range(alpha):
@@ -440,7 +452,7 @@ class WinogradConv:
                     U_slice = U[:, :, i, j]         # (K, C)
                     V_slice = V[:, :, i, j]         # (C, P)
                     M[i, j] = U_slice @ V_slice     # (K, P)
-
+            
             # --- Step 5: Inverse transform and construct output ---
             for p in range(P):
                 row = (p // n_tiles_w) * m
@@ -448,8 +460,8 @@ class WinogradConv:
                 for k in range(K):
                     y_patch = self.winograd_output_transform_manual(M[:, :, k, p])
                     Y[n, k, row:row + m, col:col + m] = y_patch
-
-        return Y,col_matrix
+        
+        return Y, col_matrix
 
 
 ###########################################################################################

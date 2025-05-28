@@ -92,14 +92,14 @@ class Model:
         print(prefix + "=" * 50)
 
 
-    def view_graph(self, input_data, filename="model_graph", format="png", view=False):
+    def view_graph(self, input_data, filename="model_graph", view=True):
         """
         Runs a forward pass using the provided input_data and visualizes the
         computation graph of the output tensor.
         """
         output_tensor = self(Tensor(input_data,requires_grad=True))
         # Assuming output_tensor is an instance of Tensor and has view_graph
-        output_tensor.view_graph(filename=filename, format=format, view=view)
+        output_tensor.view_graph(filename=filename,view=view)
 
     def load_weights_by_structure(self, state_dict, strict=True):
 
