@@ -36,6 +36,30 @@ class Layer(Module):
     def initialize_weights(self, shape,initialize_type):
         pass
 
+    def to(self, device):
+        """
+        Moves the layer's parameters to the specified device.
+        
+        Args:
+            device (str): The device to move the parameters to (e.g., 'cpu', 'cuda').
+        """
+        if self.weights is not None:
+            self.weights = self.weights.to(device)
+        if self.bias is not None:
+            self.bias = self.bias.to(device)
+
+
+##############################################################################################
+#                                                                                            #
+#                                                                                            #
+#                                                                                            #
+#                   BASIC LAYERS                                                             #
+#                                                                                            #
+#                                                                                            #
+#                                                                                            #
+##############################################################################################
+
+
 class Flatten(Module):
     """
     A layer that flattens all dimensions except the batch dimension.
@@ -46,42 +70,10 @@ class Flatten(Module):
         super().__init__()
 
     def __call__(self, input, **kwargs):
-        """
-        Flattens the input tensor (except for the batch dimension).
-        
-        Args:
-            input (Tensor): Input tensor of shape [B, *], where B is the batch size.
-        
-        Returns:
-            Tensor: Flattened tensor of shape [B, -1].
-        """
-        self.input = input
-        # Flatten all dimensions except the batch dimension
         batch_size = input.shape[0]
-        flattened_data = input.data.reshape(batch_size, -1)  # Flatten all dimensions except batch
+        flattened_data = input.reshape(batch_size, -1)  # Flatten all dimensions except batch
 
-        self.output = Tensor(flattened_data, requires_grad=True)
-        self.output._grad_fn = self.backward
-        self.output.op_name = "Flatten"  # Set operation name for autograd
-        self.output.parents = [self.input]
-        return self.output
-
-    def backward(self, grad):
-        """
-        Backpropagation for the flatten layer. Since flattening is a simple operation,
-        the gradient is passed through unchanged.
-        
-        Args:
-            grad (np.ndarray): Gradient of loss with respect to the output.
-        
-        Returns:
-            np.ndarray: Gradient of loss with respect to the input (same shape as input).
-        """
-        # The gradient is passed through unchanged since flattening is a simple reshape
-        grad_input = grad.reshape(self.input.shape)  # Reshape gradient back to the input shape
-        self.input.assign_grad(grad_input)
-        return grad_input
-
+        return flattened_data
 
 class Linear(Layer):
     """
@@ -160,74 +152,11 @@ class Linear(Layer):
         return Tensor(w, requires_grad=True), Tensor(b, requires_grad=True)  # Return Tensor objects for weights and biases
 
     def __call__(self, input,**kwargs):
-        """
-        Performs the forward pass of the linear layer.
-        
-        Args:
-            input (np.ndarray): Input tensor.
-            test (bool, optional): Whether the model is in test mode (disables dropout). Defaults to False.
-            
-        Returns:
-            np.ndarray: Output of the affine transformation.
-        """
-        self.input = input
-        original_shape = input.shape
-
-        # Reshape input to 2D for matmul (PyTorch automatically does this)
-        reshaped_input = input.data.reshape(-1, self.input_dim)  # Flatten all but the last dimension
-
-        # Linear transformation
-        out = reshaped_input @ self.weights.data
+        out = input @ self.weights
         if self.bias_flag:
-            out += self.bias.data
+            out = out + self.bias.reshape(1, -1)
 
-        # Restore original shape with output_dim in last place
-        new_shape = original_shape[:-1] + (self.output_dim,)  # Keeps batch dimensions intact
-        out = out.reshape(new_shape)
-
-        # Apply activation if specified
-        if self.activation is not None:
-            out = self.activation(out)
-
-        self.output = Tensor(out, requires_grad=True)
-        self.output._grad_fn = self.backward
-        self.output.op_name = "Linear"  # Set operation name for autograd
-        self.output.parents = [self.input]  # Set backward function for autograd
-        return self.output
-
-    def backward(self, grad,**kwargs):
-        """
-        Performs the backward pass, computing gradients of the loss with respect to input, weights, and bias.
-        
-        Args:
-            grad (np.ndarray): Gradient of loss with respect to layer output.
-        
-        Returns:
-            np.ndarray: Gradient of loss with respect to layer input.
-        """
-        # Apply activation gradient if activation exists
-        grad = self.activation.grad_fn(grad) if self.activation is not None else grad
-
-        # Reshape gradient to match the shape used in forward pass
-        reshaped_input = self.input.data.reshape(-1, self.input_dim)  # Flatten input before matrix multiplication
-        # Compute gradient of loss w.r.t. weights
-        dweights = reshaped_input.T @ grad.reshape(-1, self.output_dim)  # Corrected shape for batch processing
-        self.weights.assign_grad(dweights)
-        # Compute gradient of loss w.r.t. bias (sum over batch dimensions)
-        if self.bias_flag:
-            dbias = np.sum(grad, axis=tuple(range(len(grad.shape) - 1)))  # Sum over all non-output dimensions
-
-        self.bias.assign_grad(dbias)
-        # Compute gradient of loss w.r.t. input
-        grad_input = grad @ self.weights.data.T  # (B, output_dim) x (output_dim, input_dim) -> (B, input_dim)
-
-        # Reshape grad_input to match the original input shape
-        grad_input = grad_input.reshape(self.input.shape)
-
-        # Assign gradient to input tensor for autograd
-        self.input.assign_grad(grad_input)  
-        ret_grad = kwargs['ret_grad'] if 'ret_grad' in kwargs else False
-        return grad_input if ret_grad else None
+        return out
     
 
 class Conv2d(Layer):
@@ -261,7 +190,7 @@ class Conv2d(Layer):
         else:
             self.engine = "im2col"
 
-        print(f"Using {self.engine} convolution")
+        # print(f"Using {self.engine} convolution")
         self.convolver = None
         # Convolution operation utility
         if self.engine == "im2col":
@@ -329,99 +258,36 @@ class Conv2d(Layer):
         return Tensor(w, requires_grad=True),Tensor(b, requires_grad=True)  # Return Tensor objects for w, b
 
     def __call__(self, input,**kwargs):
-        """
-        Performs the forward pass of the convolution operation.
-        
-        Args:
-            input (np.ndarray): Input tensor of shape (batch_size, input_channels, height, width).
-            test (bool, optional): Whether the model is in test mode (disables dropout). Defaults to False.
-        
-        Returns:
-            np.ndarray: Output tensor after convolution.
-        """
-        if input.ndim != 4:
-            raise ValueError(f"Expected 4D input (batch_size, channels, height, width), got shape {input.data.shape}")
-        if input.shape[1] != self.input_channels:
-            raise ValueError(f"Expected {self.input_channels} input channels, got {input.data.shape[1]}")
-
-        # print(type(input))
-        # print(type(self.weights.data))
-        self.input = input
-        output, self.col_matrix = self.convolver.convolve(self.input.data, self.weights.data, stride=self.stride, padding=self.padding)
-        if self.bias_flag:
-            bias_reshaped = self.bias.data.reshape(1, self.output_channels, 1, 1)
-            output = output + bias_reshaped
-
-        # output = output + self.bias.data
-        if self.activation is not None:
-            output = self.activation(output)
-        self.output = Tensor(output,requires_grad=True)
-        self.output._grad_fn = self.backward 
-        self.output.op_name = "conv2d"
-        self.output.parents = [self.input]
-
-        return self.output
-
-    def backward(self, grad, **kwargs):
-        """
-        Computes the backward pass of the convolution operation.
-        
-        Args:
-            grad (np.ndarray): Gradient of the loss with respect to the output tensor.
-        
-        Returns:
-            np.ndarray: Gradient of the loss with respect to the input tensor.
-        """
-        #TODO: the gradient wrt the weights is convolve(input, grad) || and the gradient wrt the input is transposedconv2d(grad, weights.fliped)
-        B, F, H_out, W_out = self.output.data.shape
-        grad = self.activation.grad_fn(grad) if self.activation is not None else grad
-        
-        # Gradient wrt biases
-        if self.bias_flag:
-            dbias = np.sum(grad, axis=(0, 2, 3), keepdims=False)
-            self.bias.assign_grad(dbias)
-        
-        
-        grad_reshaped = grad.reshape(B * H_out * W_out, F)
-        
-        # Transpose to get: (F, B * H_out * W_out)
-        grad_reshaped_T = grad_reshaped.T
-        
-        # Now multiply with col_matrix to get: (F, C * kernel_size * kernel_size)
-        grad_kernel_matrix = grad_reshaped_T @ self.col_matrix
-        
-        # Reshape to get the proper kernel gradient shape
-        dkernel = grad_kernel_matrix.reshape(self.output_channels, self.input_channels, self.kernel_size, self.kernel_size)
-        self.weights.assign_grad(dkernel)
-        
-        # Gradient wrt input
-        kernel_matrix = self.weights.data.reshape(self.output_channels, -1)  # Shape: (F, C*k*k)
-        dout_matrix = grad.reshape(B * H_out * W_out, F)  # Shape: (B*H_out*W_out, F)
-        dX_col = dout_matrix @ kernel_matrix  # Shape: (B*H_out*W_out, C*k*k)
-
-        # Use col2im_accumulation to fold dX_col back to the padded input shape.
-        dInput_padded = self.back_convolver.col2im_accumulation(
-            dX_col=dX_col,
-            input_shape=self.input.data.shape, 
-            filter_height=self.kernel_size,
-            filter_width=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding
+        batch_stride, channel_stride, height_stride, width_stride = input.data.strides
+        strides = (
+            batch_stride,
+            channel_stride,
+            height_stride,
+            width_stride,
+            height_stride,
+            width_stride,
         )
-        
-        # Remove the padding to recover gradient w.r.t. the original input.
+        b,c,h,w = input.shape
+        F,_,hk, wk = self.weights.data.shape
+        hout = (h + 2 * self.padding - hk) // self.stride + 1
+        wout = (w + 2 * self.padding - wk) // self.stride + 1
+        shape = (b, c, hout, wout, hk, wk) # Reshape to (B, C, H_out, W_out, kernel_height, kernel_width)
         if self.padding > 0:
-            dInput = dInput_padded[:, :, self.padding:-self.padding, self.padding:-self.padding]
-        else:
-            dInput = dInput_padded
+            input = input.pad(((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)), mode='constant')
 
-        self.input.assign_grad(dInput) 
-        ret_grad = kwargs['ret_grad'] if 'ret_grad' in kwargs else False
-        return dInput if ret_grad else None
+        strided_input = input.as_strided(shape,strides)
+        col_matrix = strided_input.transpose(0, 2, 3, 1, 4, 5).reshape(b * hout * wout, c * hk * wk)
+        reshaped_kernel = self.weights.reshape(F, c * hk * wk).T
 
+        out = col_matrix @ reshaped_kernel  # Matrix multiplication
+        out_reshaped = out.reshape(b, hout, wout, F).transpose(0, 3, 1, 2)  # Reshape to (B, F, H_out, W_out)
+        if self.bias_flag:
+            bias_reshaped = self.bias.reshape(1, self.output_channels, 1, 1)
+            out_reshaped = out_reshaped + bias_reshaped
 
+        
 
-
+        return out_reshaped
 
 
 
@@ -441,183 +307,37 @@ class MaxPool2d(Module):
         self.padding = padding
         self.cache = {}
 
-    def __call__(self, X, **kwargs):
-        """
-        Forward pass for max pooling.
-
-        Args:
-            X (np.ndarray): Input tensor of shape (batch_size, channels, height, width).
-            test (bool, optional): Whether the model is in test mode. Defaults to False.
-
-        Returns:
-            np.ndarray: Output tensor after max pooling.
-        """
-        self.input = X
-        B, C, H, W = self.input.data.shape
+    def __call__(self, x, **kwargs):
+        B, C, H, W = x.shape
         H_k, W_k = self.kernel_size
         stride_h, stride_w = self.stride
 
-        padded_X = np.pad(
-            self.input.data,
-            ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)),
-            mode='constant'
-        )
+        # Apply padding manually
+        if self.padding > 0:
+            x = x.pad(
+                ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)),
+                mode='constant'
+            )
 
-        windows = sliding_window_view(padded_X, (H_k, W_k), axis=(2, 3))
-        windows = windows[:, :, ::stride_h, ::stride_w, :, :]
+        H_padded, W_padded = x.shape[2], x.shape[3]
+        H_out = (H_padded - H_k) // stride_h + 1
+        W_out = (W_padded - W_k) // stride_w + 1
 
-        max_windows = windows.reshape(B, C, -1, H_k * W_k)
-        max_vals = max_windows.max(axis=-1)
-        max_indices = max_windows.argmax(axis=-1)
+        # Strides of the input array
+        s0, s1, s2, s3 = x.data.strides
 
-        output = max_vals.reshape(B, C, -1)
-        H_out = int(np.sqrt(output.shape[2]))
-        output = output.reshape(B, C, H_out, H_out)
+        # Compute shape and strides for as_strided
+        shape = (B, C, H_out, W_out, H_k, W_k)
+        strides = (s0, s1, s2 * stride_h, s3 * stride_w, s2, s3)
 
-        self.cache['out_shape'] = output.shape
-        self.cache['input'] = self.input
-        self.cache['max_indices'] = (
-            max_indices,
-            windows.shape,
-            (stride_h, stride_w)
-        )
+        # Get windowed view
+        windows = x.as_strided(shape=shape, strides=strides)
 
-        self.output = Tensor(output,requires_grad=True)
-        self.output._grad_fn = self.backward
-        self.output.op_name = "maxpool2d"
-        self.output.parents = [self.input]
-        return self.output
+        # Perform max pooling
+        max_vals = windows.reshape(B, C, H_out, W_out, -1).max(axis=-1)
 
-    def backward(self, grad_output):
-        """
-        Backward pass for max pooling.
+        return max_vals
 
-        Args:
-            grad_output (np.ndarray): Gradient of the loss with respect to the output.
-
-        Returns:
-            np.ndarray: Gradient of the loss with respect to the input.
-        """
-        # print(grad_output)
-        
-        X = self.cache['input'].data
-        max_indices, window_shape, strides = self.cache['max_indices']
-        grad_output = grad_output.reshape(*self.cache['out_shape'])
-        B, C, H_out, W_out = grad_output.shape
-        stride_h, stride_w = strides
-        kernel_H, kernel_W = self.kernel_size
-        H_in, W_in = X.shape[2], X.shape[3]
-        padding = self.padding
-
-        max_indices_4d = max_indices.reshape(B, C, H_out, W_out)
-
-        # Generate all indices for B, C, H_out, W_out
-        b, c, i, j = np.indices((B, C, H_out, W_out))
-
-        # Compute starting positions and offsets
-        h_start = i * stride_h
-        w_start = j * stride_w
-        h_offset = max_indices_4d // kernel_W
-        w_offset = max_indices_4d % kernel_W
-
-        # Calculate positions in padded and original input
-        h_padded = h_start + h_offset
-        w_padded = w_start + w_offset
-        h_original = h_padded - padding
-        w_original = w_padded - padding
-
-        # Mask for valid positions within original input dimensions
-        valid = (h_original >= 0) & (h_original < H_in) & (w_original >= 0) & (w_original < W_in)
-
-        # Extract valid indices and corresponding gradients
-        valid_b = b[valid]
-        valid_c = c[valid]
-        valid_h = h_original[valid]
-        valid_w = w_original[valid]
-        valid_grad = grad_output[valid]
-
-        # Accumulate gradients using vectorized scatter-add
-        # print(type(valid_grad))
-        grad_input = np.zeros_like(X)
-        np.add.at(grad_input, (valid_b, valid_c, valid_h, valid_w), valid_grad)
-        self.input.assign_grad(grad_input)
-             
-# the input is the output of the conv2d layer which will be [B,C,H,W]
-# the output will be [B,C,H,W]
-# each filter will have its own mean and variance and beta and gamma
-class batchnorm2d(Layer):
-    def __init__(self,channels,betanorm=0.9):  
-        super().__init__()
-        self.eps = 1e-8
-        self.mean = None
-        self.var = None
-        self.running_mean = None
-        self.running_variance = None
-        self.weights = None
-        self.bias = None
-        self.input = None
-        self.output = None
-        self.input_normalized = None
-        self.betanorm = betanorm
-        self.initialize_weights(channels)
-    def initialize_weights(self, channels):
-        running_mean = np.zeros((1, channels, 1, 1))
-        running_variance = np.ones((1, channels, 1, 1))
-        weights = np.ones((1, channels, 1, 1))  # Gamma initialized to 1
-        bias = np.zeros((1, channels, 1, 1))  # Beta initialized to 0
-        self.running_mean = Tensor(running_mean, requires_grad=False)
-        self.running_variance = Tensor(running_variance, requires_grad=False)
-        self.weights = Tensor(weights, requires_grad=True)
-        self.bias = Tensor(bias, requires_grad=True)
-
-
-    def parameters(self):
-        return [self.weights,self.bias]
-    
-    def trained_parameters(self):
-        # print("bn params")
-        return [self.weights,self.bias,self.running_mean,self.running_variance]
-    
-    def __call__(self, input, **kwargs):
-
-        if Config.TEST==False:
-            self.input = input
-            self.mean = np.mean(self.input.data, axis=(0, 2, 3), keepdims=True)
-            self.var = np.var(self.input.data, axis=(0, 2, 3), keepdims=True)
-            self.running_mean.data = (self.betanorm * self.running_mean.data) + ((1 - self.betanorm) * self.mean)
-            self.running_variance.data = (self.betanorm * self.running_variance.data) + ((1 - self.betanorm) * self.var)
-            self.input_normalized = (self.input.data - self.mean) / np.sqrt(self.var + self.eps)
-            output = self.weights.data * self.input_normalized + self.bias.data
-            self.output = Tensor(output, requires_grad=True)
-            self.output._grad_fn = self.backward
-            self.output.op_name = "batchnorm2d"
-            self.output.parents = [self.input]
-            return self.output
-        else:
-            self.input = input
-            self.mean = self.running_mean.data
-            self.var = self.running_variance.data
-            self.input_normalized = (self.input.data - self.mean) / np.sqrt(self.var + self.eps)
-            output = self.weights.data * self.input_normalized + self.bias.data
-            self.output = Tensor(output, requires_grad=False)
-            return self.output
-
-    
-    def backward(self, grad):
-        B, C, H, W = self.input.shape
-
-        # Gradients for beta and gamma
-        dbeta = np.sum(grad, axis=(0, 2, 3), keepdims=True)  # Sum over B, H, W
-        dgamma = np.sum(grad * self.input_normalized, axis=(0, 2, 3), keepdims=True)
-        self.bias.assign_grad(dbeta)
-        self.weights.assign_grad(dgamma)
-        # Gradient w.r.t. input (dx)
-        std_inv = 1.0 / np.sqrt(self.var + self.eps)
-        dx_hat = grad * self.weights.data  # Chain rule: dy/dx_hat = gamma * grad
-        dvar = np.sum(dx_hat * (self.input.data - self.mean) * -0.5 * std_inv**3, axis=(0, 2, 3), keepdims=True)
-        dmean = np.sum(-dx_hat * std_inv, axis=(0, 2, 3), keepdims=True) + dvar * np.mean(-2 * (self.input.data - self.mean), axis=(0, 2, 3), keepdims=True)
-        dinput = dx_hat * std_inv + dvar * 2 * (self.input.data - self.mean) / (B * H * W) + dmean / (B * H * W)
-        self.input.assign_grad(dinput)
 
 class GAP(Module):
     def __init__(self):
@@ -648,11 +368,124 @@ class GAP(Module):
 #                                                                                            #
 #                                                                                            #
 #                                                                                            #
+#                   ALOT OF NORMALIZATIONS                                                   #
+#                                                                                            #
+#                                                                                            #
+#                                                                                            #
+##############################################################################################
+
+
+class GeneralNorm(Layer):
+    def __init__(self, axes, param_shape):
+        super().__init__()
+        self.axes = axes
+        self.gamma = Tensor(np.ones(param_shape), requires_grad=True)
+        self.beta = Tensor(np.zeros(param_shape), requires_grad=True)
+
+    def __call__(self, input, **kwargs):
+        mean = input.mean(axis=self.axes, keepdims=True)
+        var = input.var(axis=self.axes, keepdims=True)
+        x_norm = (input - mean) / (var + 1e-5).sqrt()
+        return self.gamma * x_norm + self.beta
+
+class ConvBatchNorm2D(GeneralNorm):
+    def __init__(self, channels):
+        super().__init__(axes=(0, 2, 3), param_shape=(1, channels, 1, 1))
+        self.eps = Tensor(1e-5, requires_grad=False)  # Small constant for numerical stability
+        self.running_mean = Tensor(np.zeros((1, channels, 1, 1)), requires_grad=False)
+        self.running_variance = Tensor(np.ones((1, channels, 1, 1)), requires_grad=False)
+        self.betanorm = Tensor(0.9, requires_grad=False)  # Beta normalization factor
+    def __call__(self, input, **kwargs):
+        mean = input.mean(axis=(0, 2, 3), keepdims=True)
+        var = input.var(axis=(0, 2, 3), keepdims=True)
+        self.running_mean = (self.running_mean * self.betanorm) + (mean * (1 - self.betanorm))
+        self.running_variance = (self.running_variance * self.betanorm) + (var * (1 - self.betanorm))
+        if Config.TEST==False:
+            x_norm = (input - mean) / (var + 1e-5).sqrt()
+        
+        else:
+            x_norm = (input - self.running_mean) / (self.running_variance + 1e-5).sqrt()
+
+        return self.gamma * x_norm + self.beta
+    
+    def parameters(self):
+        return [self.gamma, self.beta, self.running_mean, self.running_variance]
+
+
+class InstanceNorm2D(GeneralNorm):
+    def __init__(self, channels):
+        super().__init__(axes=(2, 3), param_shape=(1, channels, 1, 1))
+
+class LayerNorm2D(GeneralNorm):
+    def __init__(self, channels):
+        super().__init__(axes=(1, 2, 3), param_shape=(1, channels, 1, 1))
+
+class LayerNorm1D(GeneralNorm):
+    def __init__(self, dim):
+        super().__init__(axes=-1, param_shape=(1, dim))
+
+class LayerNorm3D(GeneralNorm):
+    def __init__(self, dim):
+        super().__init__(axes=-1, param_shape=(1, 1, dim))
+
+
+class GroupNorm(Layer):
+    def __init__(self, num_channels, num_groups):
+        super().__init__()
+        assert num_channels % num_groups == 0, "num_channels must be divisible by num_groups"
+        self.num_groups = num_groups
+        self.num_channels = num_channels
+        self.group_size = num_channels // num_groups
+        self.gamma = Tensor(np.ones((1, num_channels, 1, 1)), requires_grad=True)
+        self.beta = Tensor(np.zeros((1, num_channels, 1, 1)), requires_grad=True)
+
+    def __call__(self, x, **kwargs):
+        B, C, H, W = x.shape
+        G = self.num_groups
+        assert C == self.num_channels
+
+        # Reshape to (B, G, C//G, H, W)
+        x_reshaped = x.reshape(B, G, self.group_size, H, W)
+
+        # Compute mean and var across (2, 3, 4)
+        mean = x_reshaped.mean(axis=(2, 3, 4), keepdims=True)
+        var = x_reshaped.var(axis=(2, 3, 4), keepdims=True)
+
+        # Normalize
+        x_norm = (x_reshaped - mean) / (var + 1e-5).sqrt()
+
+        # Reshape back to (B, C, H, W)
+        x_norm = x_norm.reshape(B, C, H, W)
+
+        
+        return self.gamma * x_norm + self.beta
+
+class rmsnorm(Layer):
+    def __init__(self, dim, eps=1e-6):
+        #shape is (b,t,dim)
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        shape = (1,1, dim)
+        self.gamma = Tensor(np.ones(shape), requires_grad=True)
+
+    def __call__(self, x, **kwargs):
+        mean_square = (x ** 2).mean(axis=-1, keepdims=True)
+        x_norm = x / np.sqrt(mean_square + self.eps)
+        return self.gamma * x_norm
+
+
+
+##############################################################################################
+#                                                                                            #
+#                                                                                            #
+#                                                                                            #
 #                    Transformers Building Blocks (Attention + ViT Patches)                  #
 #                                                                                            #
 #                                                                                            #
 #                                                                                            #
 ##############################################################################################
+
 
 
 class PatchEmbedding(Layer):
@@ -693,126 +526,98 @@ class PositionalEmbedding(Layer):
     def __call__(self, x, **kwargs):
         return x + self.pos_embed[:, :x.shape[1]]
 
-class LayerNorm(Layer):
-    def __init__(self, dim, eps=1e-5):
-        super().__init__()
-        self.gamma = Tensor(np.ones(dim), requires_grad=True)
-        self.beta = Tensor(np.zeros(dim), requires_grad=True)
-        self.eps = Tensor(eps, requires_grad=True)
-
-    def __call__(self, x, **kwargs):
-        mean = x.mean(axis=-1, keepdims=True)
-        std = x.std(axis=-1, keepdims=True)
-        x_norm = (x - mean) / (std + self.eps)
-        output = self.gamma * x_norm + self.beta
-        
-        return output
-
-
 class SelfAttention(Layer):
-    def __init__(self, dmodel):
+    def __init__(self, dmodel,d_head=None,masked=False,out_proj=False):
         super().__init__()
-        self.scale = np.sqrt(dmodel)
-        self.softmax = Softmax()
-        self.q = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
-        self.k = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
-        self.v = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
+        self.dhead = d_head if d_head is not None else dmodel
+        self.scale = Tensor(self.dhead, requires_grad=False).sqrt()
+
+        self.q_proj = Linear(dmodel, self.dhead , initialize_type='random')
+        self.k_proj = Linear(dmodel, self.dhead , initialize_type='random')
+        self.v_proj = Linear(dmodel, self.dhead , initialize_type='random')
+        self.out_proj = Linear(dmodel, self.dhead , initialize_type='random') if out_proj else None
+        
+        self.masked = masked
 
     
-    def forward(self, q, k, v, masked=False):
-        B, nheads, T, head_dim = q.shape
+    def __call__(self, input,q=None, k=None, v=None):
+        
+        if q is None and k is None and v is None:
+            q = self.q_proj(input)
+            k = self.k_proj(input)
+            v = self.v_proj(input)
 
-        scores = (q @ k.transpose(0, 1, 3, 2)) / self.scale  # (B, nheads, T, T)
+        qk = q @ k.transpose(0, 2, 1) / self.scale  # Scaled dot-product attention scores (B, T, T)
 
-        if masked:
-            mask = np.triu(np.ones((T, T), dtype=np.float32), k=1) * -1e10
-            scores += mask
+        if self.masked:
+            B, T, _ = qk.shape
+            mask = Tensor(np.triu(np.ones((T, T)), k=1)* -1e10, requires_grad=False).reshape(1, T, T) 
+            qk = qk + mask  
 
-        weights = self.softmax(scores, axis=-1)  # (B, nheads, T, T)
-        out = weights @ v  # (B, nheads, T, head_dim)
+        attn_weights = qk.softmax(axis=-1)  
+        attn_output = attn_weights @ v  # (B, T, dhead)
 
-        self.cache = (q, k, v, weights)
-        return out
+        if self.out_proj:
+            attn_output = self.out_proj(attn_output)
+        
+        
+        return attn_output
+        
 
-    def backward(self, grad_out, **kwargs):
-        q, k, v, weights = self.cache
-        B, nheads, T, head_dim = q.shape
-
-        grad_weights = grad_out @ v.transpose(0, 1, 3, 2)  # (B, nheads, T, T)
-        grad_v = weights.transpose(0, 1, 3, 2) @ grad_out
-
-        grad_scores = weights * (grad_weights - (grad_weights * weights).sum(axis=-1, keepdims=True))
-        grad_scores /= self.scale
-
-        grad_q = grad_scores @ k
-        grad_k = grad_scores.transpose(0, 1, 3, 2) @ q
-
-        self.q.assign_grad(grad_q)
-        self.k.assign_grad(grad_k)
-        self.v.assign_grad(grad_v)
-        if kwargs.get('ret_grad', False):
-            return grad_q, grad_k, grad_v
+    
 
 
 
 
 class MultiHeadAttention(Layer):
-    def __init__(self, dmodel, nheads=1, masked=False, encoder_decoder=False):
+    def __init__(self, dmodel, n_heads, masked=False):
         super().__init__()
-        assert dmodel % nheads == 0, "dmodel must be divisible by nheads"
+        assert dmodel % n_heads == 0, "dmodel must be divisible by n_heads"
+        
         self.dmodel = dmodel
-        self.nheads = nheads
-        self.head_dim = dmodel // nheads
-        self.attn_proj = Linear(dmodel, dmodel * 3, initialize_type='zero')
-        self.out_proj = Linear(dmodel, dmodel, initialize_type='zero')
+        self.n_heads = n_heads
+        self.d_head = dmodel // n_heads
         self.masked = masked
-        self.encoder_decoder = encoder_decoder
-        self.attn = SelfAttention(self.head_dim)  # Per-head scaled dot-product attention
-        self.q = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
-        self.k = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
-        self.v = Tensor(np.zeros((1, 1, 1, 1)), requires_grad=True)
-    def __call__(self, x, **kwargs):
-        B, T, _ = x.shape
-        self.input = x
+        self.scale = Tensor(self.d_head).sqrt()  # Scale factor for attention scores
 
-        if not self.encoder_decoder:
-            qkv = self.attn_proj(x).data  # (B, T, dmodel * 3)
-            q, k, v = np.split(qkv, 3, axis=2)
-        else:
-            q, k, v = kwargs['q'], kwargs['k'], kwargs['v']
+        # Single linear layer for q, k, v: (B, T, D) -> (B, T, 3D)
+        self.qkv_proj = Linear(dmodel, 3 * dmodel, initialize_type='random')
+        
+        # Output projection: (B, T, D)
+        self.out_proj = Linear(dmodel, dmodel, initialize_type='random')
 
-        # Reshape for multi-head attention
-        def reshape(t): return t.reshape(B, T, self.nheads, self.head_dim).transpose(0, 2, 1, 3)
-        q, k, v = reshape(q), reshape(k), reshape(v)
-        self.q, self.k, self.v = q, k, v
+    def __call__(self, x):
+        b, t, _ = x.shape
+        
 
-        out = self.attn.forward(q, k, v, masked=self.masked)
-        out = out.transpose(0, 2, 1, 3).reshape(B, T, self.dmodel)
-        out = self.out_proj(Tensor(out))
 
-        out.parents = [x]
-        out._grad_fn = self.backward
-        return out
+        qkv = self.qkv_proj(x)  # (B, T, 3D)
+        q, k, v = qkv.split(indices_or_sections=3, axis=2)  # Each is (B, T, D)
+        # print(f"q shape: {q.shape}, k shape: {k.shape}, v shape: {v.shape}")
 
-    def backward(self, grad_out, **kwargs):
-        B, T, _ = grad_out.shape
-        grad_attn_out = self.out_proj.backward(grad_out, ret_grad=True)
-        grad_attn_out = grad_attn_out.reshape(B, T, self.nheads, self.head_dim).transpose(0, 2, 1, 3)
+        def reshape_heads(tensor):  # (B, T, D) -> (B, n_heads, T, d_head)
+            return tensor.reshape(b, t, self.n_heads, self.d_head).transpose(0 ,2, 1, 3)  # (B, n_heads, T, d_head)
 
-        grad_q, grad_k, grad_v = self.attn.backward(grad_attn_out,ret_grad=True)
+        q = reshape_heads(q)
+        k = reshape_heads(k)
+        v = reshape_heads(v)
 
-        # Reconstruct gradients to full shape
-        def restore(t): return t.transpose(0, 2, 1, 3).reshape(B, T, self.dmodel)
-        grad_q, grad_k, grad_v = restore(grad_q), restore(grad_k), restore(grad_v)
+      
+        scores = (q @ k.transpose(0, 1, 3, 2)) / self.scale  # (B, n_heads, T, T)
 
-        if not self.encoder_decoder:
-            grad_qkv = np.concatenate([grad_q, grad_k, grad_v], axis=2)
-            grad_x = self.attn_proj.backward(grad_qkv, ret_grad=True)
-            self.input.assign_grad(grad_x)
-            return grad_x if kwargs.get('ret_grad', False) else None
-        else:
-            self.q.assign_grad(grad_q)
-            self.k.assign_grad(grad_k)
-            self.v.assign_grad(grad_v)
-            return None
+        if self.masked:
+            _, _, T, _ = scores.shape
+            mask_data = np.triu(np.ones((T, T), dtype=np.float32), k=1) * -1e10
+            mask = Tensor(mask_data, requires_grad=False, device=x.device).reshape(1, 1, T, T)
+            scores = scores + mask
 
+        weights = scores.softmax(axis=-1)  # (B, n_heads, T, T)
+        attn = weights @ v  # (B, n_heads, T, d_head)
+
+       
+        attn = attn.transpose(0,2,1,3).reshape(b, t, self.dmodel)
+
+      
+        return self.out_proj(attn)
+
+        

@@ -25,6 +25,18 @@ class Model:
         if isinstance(value, (Layer, Module, Activation, Model)):
             self.layers[name] = value
 
+
+    def to(self, device):
+        """
+        Move the model to the specified device (e.g., CPU or GPU).
+        """
+        for layer in self.layers.values():
+            if isinstance(layer, Model):
+                layer.to(device)
+            elif hasattr(layer, 'to'):
+                layer.to(device)
+        return self
+
     def parameters(self):
         params = []
         seen = set()  # Track seen objects to avoid duplicates

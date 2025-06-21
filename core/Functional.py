@@ -4,13 +4,40 @@ class AddBackward:
     def __init__(self, a, b):
         self.a = a
         self.b = b
+
+    def _reduce_grad(self, grad, target_shape):
+        # Align shapes by adding leading 1s to target_shape if needed
+        ndim_diff = len(grad.shape) - len(target_shape)
+        target_shape_extended = (1,) * ndim_diff + target_shape
+
+        # Find axes where target_shape is 1 but grad.shape > 1 → broadcasted axes
+        reduce_axes = tuple(
+            i for i, (t_dim, g_dim) in enumerate(zip(target_shape_extended, grad.shape))
+            if t_dim == 1 and g_dim > 1
+        )
+
+        # Sum over broadcasted axes
+        if reduce_axes:
+            grad = grad.sum(axis=reduce_axes, keepdims=True)
+
+        # Remove added leading dims to match target_shape exactly
+        grad = grad.reshape(target_shape)
+
+        return grad
+
     def __call__(self, grad):
         if self.a.requires_grad:
-            # print("a requires grad", self.a._grad_fn)
-            self.a.assign_grad(grad)
+            grad_a = grad
+            if self.a.data.shape != grad.shape:
+                grad_a = self._reduce_grad(grad, self.a.data.shape)
+            self.a.assign_grad(grad_a)
+
         if self.b.requires_grad:
-            # print("b requires grad", self.b._grad_fn)
-            self.b.assign_grad(grad)
+            grad_b = grad
+            if self.b.data.shape != grad.shape:
+                grad_b = self._reduce_grad(grad, self.b.data.shape)
+            self.b.assign_grad(grad_b)
+
 
 class MulBackward:
     def __init__(self, a, b):
@@ -38,7 +65,7 @@ class PowBackward:
         self.power = power
     def __call__(self, grad):
         if self.a.requires_grad:
-            self.a.assign_grad(grad * self.power * (self.a.data ** (self.power - 1)))
+            self.a.assign_grad(grad * self.power * (np.power(self.a.data , (self.power - 1))))
 
 class SubBackward:
     def __init__(self, a, b):
@@ -73,19 +100,24 @@ class ReshapeBackward:
 class TransposeBackward:
     def __init__(self, a, axes):
         self.a = a
-        self.axis = axes  # The axes that were used for the transpose
+        self.axes = axes  # fix typo: use self.axes
 
     def __call__(self, grad):
-        if self.a.requires_grad:
-            # Reverse the axes of the gradient to properly propagate it
-            
-            # Check if the number of axes of grad matches self.a's data
-            if grad.ndim == self.a.data.ndim:
-                self.a.assign_grad(grad.transpose(*self.axis))
-            else:
-                # If grad does not have the same number of dimensions as self.a, handle broadcasting
-                # This is a more advanced scenario, but typically we expect them to match
-                raise ValueError("Grad shape does not match the expected shape for transpose.", grad.shape, self.a.data.shape)
+        if not self.a.requires_grad:
+            return
+
+        if grad.ndim != self.a.data.ndim:
+            raise ValueError("Gradient shape mismatch in transpose.", grad.shape, self.a.data.shape)
+
+        if self.axes is None:
+            # Default transpose: reverse all axes
+            reversed_axes = list(range(grad.ndim))[::-1]
+            self.a.assign_grad(grad.transpose(reversed_axes))
+        else:
+            # Compute inverse permutation
+            inverse_axes = np.argsort(self.axes)
+            self.a.assign_grad(grad.transpose(inverse_axes))
+
 
 
 class MatMulBackward:
@@ -102,38 +134,22 @@ class MatMulBackward:
 
 
 class SplitBackward:
-    def __init__(self, tensor, indices_or_sections, axis, num_splits):
+    def __init__(self, tensor, num_splits, axis):
         self.tensor = tensor
-        self.indices_or_sections = indices_or_sections
         self.axis = axis
-        self.num_splits = num_splits
+        self.collected_grads = [None] * num_splits
+        self.count = 0
 
-    def __call__(self, grad):
-        # Check that grad's shape is compatible with the split tensor's shape
-        if grad.shape[self.axis] != self.tensor.data.shape[self.axis]:
-            raise ValueError(f"Grad shape along axis {self.axis} is incompatible with the original tensor shape.", grad.shape, self.tensor.data.shape)
+    def __call__(self, grad, index):
+        self.collected_grads[index] = grad
+        self.count += 1
 
-        # Initialize an empty array for the gradient that matches the original tensor's shape
-        split_grad = np.zeros_like(self.tensor.data)
+        if self.count == len(self.collected_grads):
+            # All grads collected
+            
+            full_grad = np.concatenate(self.collected_grads, axis=self.axis)
+            self.tensor.assign_grad(full_grad)
 
-        # Split the gradient along the given axis and assign it back to the original tensor
-        grad_parts = np.split(grad, self.num_splits, axis=self.axis)
-        
-        # Ensure the grad_parts is aligned with the correct axis
-        if len(grad_parts) != self.num_splits:
-            raise ValueError(f"Unable to split grad into {self.num_splits} parts. Ensure the grad shape is compatible.")
-        
-        for i, grad_part in enumerate(grad_parts):
-            # Place each gradient part back into the original tensor's grad
-            if self.axis == 0:  # Split along batch axis
-                split_grad[i, :] = grad_part
-            elif self.axis == 1:  # Split along time axis
-                split_grad[:, i] = grad_part
-            else:
-                split_grad[i] = grad_part  # For other axes, handle accordingly
-        
-        # Now assign the computed gradient back to the original tensor
-        self.tensor.assign_grad(split_grad)
 
 
        

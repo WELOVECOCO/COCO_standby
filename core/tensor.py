@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.lib.stride_tricks import as_strided
 from core.Functional import (AddBackward, MulBackward, DivBackward, PowBackward,
                              NegBackward, ReshapeBackward, TransposeBackward, MatMulBackward,
                              LogBackward, MeanBackward,SumBackward,SplitBackward,StdBackward,SubBackward)
@@ -75,9 +76,6 @@ class Tensor:
             # print("ADD: other is not a Tensor, converting to Tensor")
             other = Tensor(other, requires_grad=False)
         
-        # Create name for the result
-
-        
         
         out = Tensor(self.data + other.data, self.requires_grad or other.requires_grad)
         out.parents = [self, other]
@@ -152,11 +150,56 @@ class Tensor:
             out.op_name = "div"
         return out
 
+
+    def pad(self, pad_width, mode='constant', constant_values=0):
+        padded_data = np.pad(self.data, pad_width, mode=mode, constant_values=constant_values)
+
+        if not self.requires_grad:
+            return Tensor(padded_data, requires_grad=False)
+
+        def backward(grad_output):
+            grad_input = np.zeros_like(self.data)
+            slices = tuple(slice(p[0], grad_output.shape[i] - p[1]) for i, p in enumerate(pad_width))
+            grad_input += grad_output[slices]
+            self.assign_grad(grad_input)
+
+        out = Tensor(padded_data, requires_grad=True)
+        out.parents = [self]
+        out._grad_fn = backward
+        out.op_name = "pad"
+        return out
+
+
+    def as_strided(self, shape, strides):
+        data = as_strided(self.data, shape=shape, strides=strides)
+        
+        if not self.requires_grad:
+            return Tensor(data, requires_grad=False)
+
+        # Backward function
+        def backward(grad_output):
+            grad_input = np.zeros_like(self.data)
+            # This is critical: accumulate using the same view!
+            grad_view = as_strided(grad_input, shape=shape, strides=strides)
+            np.add.at(grad_view, tuple(np.indices(shape)), grad_output)
+            self.assign_grad(grad_input)
+
+        
+        
+        out = Tensor(
+            data,
+            requires_grad=True
+        )
+        out.parents = [self]
+        out._grad_fn = backward
+        out.op_name = "as_strided"
+        return out
+
     def pow(self, power):
         self_name = self.name or "tensor"
         result_name = f"{self_name}^{power}"
         
-        out = Tensor(self.data ** power, self.requires_grad)
+        out = Tensor(np.power(self.data, power), self.requires_grad)
         out.parents = [self]
         if out.requires_grad:
             out._grad_fn = PowBackward(self, power)
@@ -213,6 +256,7 @@ class Tensor:
             clip_backward.op_name = "clip"
             out._grad_fn = clip_backward
         return out
+    
 
     def mean(self, axis=None, keepdims=False):
         """Compute the mean and record the backward operation."""
@@ -221,9 +265,58 @@ class Tensor:
         
         out = Tensor(np.mean(self.data, axis=axis, keepdims=keepdims), self.requires_grad)
         out.parents = [self]
+
         if out.requires_grad:
             out._grad_fn = MeanBackward(self, axis, keepdims)
             out.op_name = "mean"
+        return out
+
+
+    
+    def sqrt(self):
+        """Compute the square root and record the backward operation."""
+        return self.pow(0.5)
+
+    def softmax(self, axis=1):
+        """Compute softmax along specified axis."""
+        self_name = self.name or "tensor"
+        
+        
+        # Subtract max for numerical stability
+        shifted = self.data - np.max(self.data, axis=axis, keepdims=True)
+        e_x = np.exp(shifted)
+        s = e_x / np.sum(e_x, axis=axis, keepdims=True)
+
+        out = Tensor(s, requires_grad=self.requires_grad, name=f"softmax({self_name})")
+        out.parents = [self]
+
+        if self.requires_grad:
+            def softmax_backward(grad):
+                grad_input = s * (grad - np.sum(grad * s, axis=axis, keepdims=True))
+                self.assign_grad(grad_input)
+            out._grad_fn = softmax_backward
+            out.op_name = "softmax"
+
+        return out
+
+
+
+    def var(self, axis=None, keepdims=False):
+        """Compute the variance and record the backward operation."""
+        self_name = self.name or "tensor"
+        result_name = f"var({self_name})"
+        
+        var_value = np.var(self.data, axis=axis, keepdims=keepdims)
+        def var_backward(grad):
+            grad = np.array(grad)
+            if not keepdims and axis is not None:
+                grad = np.expand_dims(grad, axis=axis)
+            grad = grad / np.sqrt(var_value)
+            self.assign_grad(grad)
+        out = Tensor(var_value, self.requires_grad)
+        out.parents = [self]
+        out._grad_fn = var_backward
+        out.op_name = "var"
         return out
 
     def std(self, axis=None, keepdims=False):
@@ -264,6 +357,13 @@ class Tensor:
             out.op_name = "transpose"
         return out
 
+
+
+    def __setitem__(self, key, value):
+        if isinstance(value, Tensor):
+            value = value.data  # Extract NumPy array
+        self.data[key] = value
+
     def __getitem__(self, key):
         """
         Enable NumPy-like indexing and slicing, e.g., tensor[:2, :, :, :-1].
@@ -281,8 +381,7 @@ class Tensor:
         result_name = f"{self_name}[{key}]"
 
         # If this tensor doesn't require gradients, return a simple Tensor
-        if not self.requires_grad:
-            return Tensor(sliced_data, requires_grad=False)
+
 
         # Define a backward function to propagate gradients to the original tensor
         def backward_sliced(grad):
@@ -293,16 +392,48 @@ class Tensor:
             # Propagate the gradient to this tensor
             self.assign_grad(full_grad)
         
-        backward_sliced.op_name = "slice"
+        
+        out = Tensor(sliced_data, self.requires_grad)
+        out.parents = [self]
+        if out.requires_grad:
+            out._grad_fn = backward_sliced
+            out.op_name = "getitem"
 
         # Return a new Tensor with the sliced data and gradient tracking
-        return Tensor(
-            data=sliced_data,
-            requires_grad=True,
-            parents=[self],
-            grad_fn=backward_sliced,
-            name=result_name
-        )
+        return out
+
+
+    def max(self, axis=None, keepdims=False):
+        """
+        Compute the maximum and record the backward operation.
+        Supports arbitrary axes and keeps track for gradient propagation.
+        """
+
+        max_data = np.max(self.data, axis=axis, keepdims=keepdims)
+        out = Tensor(max_data, requires_grad=self.requires_grad)
+        out.parents = [self]
+        out.op_name = "max"
+
+        def max_backward(grad):
+            # Broadcast grad to input shape
+            grad = np.array(grad)
+            if not keepdims and axis is not None:
+                grad = np.expand_dims(grad, axis=axis)
+
+            # Build a mask where data equals the max
+            max_mask = (self.data == max_data) if axis is None else (self.data == np.max(self.data, axis=axis, keepdims=True))
+
+            # If multiple max values, split gradient among them
+            num_max = np.sum(max_mask, axis=axis, keepdims=True)
+            grad_input = max_mask * grad / num_max
+
+            self.assign_grad(grad_input)
+
+
+        out._grad_fn = max_backward
+        return out
+
+
 
     def reshape(self, *shape):
         """Reshape."""
@@ -354,27 +485,27 @@ class Tensor:
     def concatenate(tensors, axis=0):
         return Tensor(np.concatenate(tensors, axis=axis), requires_grad=False, name="concatenate")
     
-    @staticmethod
-    def split(tensor, indices_or_sections, axis):
-        # Get the split tensors from np.split
-        out = np.split(tensor.data, indices_or_sections, axis=axis)
+    
+
+    def split(self, indices_or_sections, axis):
         
-        # Ensure that the split tensors have the same requires_grad as the original tensor
-        split_tensors = []
-        num_splits = len(out)  # Number of splits
-        grad_fn = SplitBackward(tensor, indices_or_sections, axis, num_splits)  # Get the original gradient function
-        grad_fn.op_name = "split"
-        
-        tensor_name = tensor.name or "tensor"
-        
-        for i, split_tensor in enumerate(out):
-            result_name = f"split({tensor_name})[{i}]"
-            split_tensor = Tensor(split_tensor, requires_grad=tensor.requires_grad)
-            split_tensor._grad_fn = grad_fn
-            split_tensor.parents = [tensor]  # Set parent to the original tensor
-            split_tensors.append(split_tensor)
-        
-        return tuple(split_tensors)
+        splits = np.split(self.data, indices_or_sections, axis=axis)
+        num_splits = len(splits)
+        grad_fn = SplitBackward(self, num_splits, axis)
+
+        result = []
+        for i, s in enumerate(splits):
+            t = Tensor(s, requires_grad=self.requires_grad)
+            if t.requires_grad:
+                def make_backward(i):
+                    return lambda grad: grad_fn(grad, i)
+                t._grad_fn = make_backward(i)
+                t.parents = [self]
+                t.op_name = f"split[{i}]"
+            result.append(t)
+
+        return tuple(result)
+
     
     @staticmethod
     def tile(tensor, reps):
@@ -388,28 +519,13 @@ class Tensor:
         result_name = f"repeat({tensor_name})"
         return Tensor(np.repeat(tensor, repeats, axis=axis), requires_grad=False)
     
-    @staticmethod
-    def softmax(x, axis=1):
-        x_name = x.name or "tensor"
-        result_name = f"softmax({x_name})"
-        e_x = np.exp(x.data - np.max(x.data, axis=axis, keepdims=True))
-        def softmax_backward(grad):
-            # Compute the gradient for softmax
-            s = e_x / e_x.sum(axis=axis, keepdims=True)
-            # Jacobian matrix for softmax
-            jacobian = np.diagflat(s) - np.outer(s, s)
-            return grad @ jacobian
-        
-        res = Tensor(e_x / e_x.sum(axis=axis, keepdims=True), requires_grad=False)
-        res._grad_fn = softmax_backward
-        res.parents = [x]
-        res._grad_fn.op_name = "softmax"
-        return 
+
+
 
     @property
     def T(self):
         """Transpose."""
-        self_name = self.name or "tensor"
+        
         
         out = Tensor(self.data.T, self.requires_grad)
         out.parents = [self]
@@ -435,7 +551,7 @@ class Tensor:
     def dtype(self):
         return self.data.dtype
 
-    def view_graph(self, filename="computational_graph", view=True):
+    def view_graph(self, filename="computational_graph", view=True,save=True):
         """
         Visualize the computational graph using PyVis.
         

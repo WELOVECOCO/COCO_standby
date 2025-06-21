@@ -143,12 +143,12 @@ class nag(Optimizer):
                 momentum_value = self.momentum[id(param)]
                 momentum_value = self.beta1 * momentum_value + (1 - self.beta1) * param.grad
                 self.momentum[id(param)] = momentum_value
-                param.data -= self.learning_rate * momentum_value
+                param.data -= (self.learning_rate * momentum_value)
             else:
                 momentum_value = self.momentum[id(param)]
-                momentum_value = self.beta1 * momentum_value + self.learning_rate * param.grad
+                momentum_value = self.beta1 * momentum_value + param.grad
                 self.momentum[id(param)] = momentum_value
-                param.data -= momentum_value
+                param.data -= (momentum_value* self.learning_rate)
 
             # Lookahead step. TODO: Check this implementation for correctness
             param.data -= self.beta1 * self.momentum[id(param)]

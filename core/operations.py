@@ -175,6 +175,18 @@ class FastConvolver:
                 H_out = (H + 2 * padding - H_k) // stride + 1
                 W_out = (W + 2 * padding - W_k) // stride + 1
         """
+
+        ''''
+        OPS:
+        reshape input to (B, C, H, W) -> (B x C x H_out, W_out x H_k x W_k) (how many patches, size of each patch)
+        reshape kernels to (F, C, H_k, W_k) -> (C x H_k x W_k, F) (size of each patch, how many filters)
+        matmul col_matrix @ kernel_matrix -> (B x H_out x W_out, F) (each patch convolved with each filter)
+        reshape result to (B, F, H_out, W_out) -> (B, F, H_out, W_out) (final output shape)
+        
+        autograd can handle this
+        '''
+
+
         B, C, H, W = input_data.shape
         F, C, H_k, W_k = kernels.shape
 
