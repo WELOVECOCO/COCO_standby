@@ -48,7 +48,7 @@ class Optimizer:
 
     def zero_grad(self):
         for param in self.params:
-            param.zero_grad()
+            param.grad = None
     def step(self):
         """
         Placeholder for the optimizer update logic.

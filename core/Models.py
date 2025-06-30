@@ -22,7 +22,7 @@ class Model:
         """
         super().__setattr__(name, value)
         # Include Model instances along with Layer, Module, and Activation.
-        if isinstance(value, (Layer, Module, Activation, Model)):
+        if isinstance(value, (Layer, Module, Model)):
             self.layers[name] = value
 
 

@@ -150,6 +150,7 @@ class FastConvolver:
 
         return dInput_padded
 
+    @staticmethod
     def convolve(self, input_data, kernels, stride=1, padding=0):
         """
         Performs 2D convolution using the im2col approach.

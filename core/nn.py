@@ -1,9 +1,9 @@
-import numpy as np
-from numpy.lib.stride_tricks import sliding_window_view
-from core.operations import *
-from core.tensor import Tensor
-from core.Function import *
 
+from core.new_tensor import Tensor
+import numpy as np
+# from core.config import Config
+
+TEST = False
 
 class Module:
     def __init__(self):
@@ -36,17 +36,6 @@ class Layer(Module):
     def initialize_weights(self, shape,initialize_type):
         pass
 
-    def to(self, device):
-        """
-        Moves the layer's parameters to the specified device.
-        
-        Args:
-            device (str): The device to move the parameters to (e.g., 'cpu', 'cuda').
-        """
-        if self.weights is not None:
-            self.weights = self.weights.to(device)
-        if self.bias is not None:
-            self.bias = self.bias.to(device)
 
 
 ##############################################################################################
@@ -82,7 +71,7 @@ class Linear(Layer):
     and optional dropout for regularization.
     """
     
-    def __init__(self,input_dim, output_dim, initialize_type="random",activation="none",dropout=None,bias=True):
+    def __init__(self,input_dim, output_dim, initialize_type="random",bias=True):
         """
         Initializes a linear layer with specified weight initialization and optional dropout.
         
@@ -92,7 +81,7 @@ class Linear(Layer):
             dropout (float, optional): Dropout rate. Defaults to None.
         """
         super().__init__()
-        self.activation = get_activation(activation, dropout) if activation != "none" else None
+       
         self.bias_flag = bias
         self.weights, self.bias = self.initialize_weights(input_dim, output_dim, initialize_type)
         self.input_dim = input_dim
@@ -160,18 +149,8 @@ class Linear(Layer):
     
 
 class Conv2d(Layer):
-    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0, initialize_type="xavier",activation="none",dropout=None,bias=True):
-        """
-        Initializes a 2D convolutional layer.
-        
-        Args:
-            input_channels (int): Number of channels in the input tensor.
-            output_channels (int): Number of filters (output channels) in the layer.
-            kernel_size (int): Size of the square convolutional kernel.
-            stride (int, optional): Step size for moving the convolutional kernel. Defaults to 1.
-            padding (int, optional): Number of pixels to pad around the input. Defaults to 0.
-            initialize_type (str, optional): Method for initializing weights. Defaults to "xavier".
-        """
+    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0, initialize_type="xavier",bias=True):
+
         super().__init__()
         self.bias_flag = bias
         self.input_channels = input_channels
@@ -179,36 +158,7 @@ class Conv2d(Layer):
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
-        self.activation = get_activation(activation, dropout) if activation != "none" else None
-
-        if kernel_size ==3 and stride == 1: 
-            self.engine = "winograd"
-
-        elif kernel_size >=7:
-            self.engine = "fft"
-
-        else:
-            self.engine = "im2col"
-
-        # print(f"Using {self.engine} convolution")
-        self.convolver = None
-        # Convolution operation utility
-        if self.engine == "im2col":
-            self.convolver = FastConvolver()
-        elif self.engine == "fft":
-            self.convolver = FFTConvolver()
-
-        elif self.engine == "winograd":
-            self.convolver = WinogradConv()
-
-        # self.convolver = FastConvolver()
-
-        self.back_convolver = FastConvolver()
-
-        # Shape of the weight tensor (filters)
         self.kernels_shape = (output_channels, input_channels, kernel_size, kernel_size)
-
-        # Initialize weights and biases based on selected method
         self.weights, self.bias = self.initialize_weights(initialize_type)
 
 
@@ -225,15 +175,6 @@ class Conv2d(Layer):
         else:
             return [self.weights]
     def initialize_weights(self, initialize_type="xavier"):
-        """
-        Initializes weights and biases for the Conv2D layer.
-
-        Args:
-            initialize_type (str): Type of initialization ('zero', 'random', 'xavier', 'he', 'lecun').
-
-        Returns:
-            tuple: Initialized weight and bias tensors.
-        """
         if initialize_type == 'zero':
             w = np.zeros(self.kernels_shape)
         elif initialize_type == 'random':
@@ -253,41 +194,59 @@ class Conv2d(Layer):
         # Bias is usually initialized to zero
         b = np.zeros((self.output_channels)) if self.bias_flag else None
 
-
-
         return Tensor(w, requires_grad=True),Tensor(b, requires_grad=True)  # Return Tensor objects for w, b
 
-    def __call__(self, input,**kwargs):
+    def __call__(self, input, **kwargs):
+       
+        b, c, _, _ = input.shape
+        F, _, hk, wk = self.weights.data.shape
+
+        
+        if self.padding > 0:
+            input = input.pad(((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)), mode='constant')
+        
+        h_p, w_p = input.shape[2], input.shape[3]
+
+        # Compute output dimensions
+        hout = (h_p - hk) // self.stride + 1
+        wout = (w_p - wk) // self.stride + 1
+
+        # Strides of input data
         batch_stride, channel_stride, height_stride, width_stride = input.data.strides
+
+        # Shape and strides for as_strided to extract sliding windows
+        shape = (b, c, hout, wout, hk, wk)
         strides = (
             batch_stride,
             channel_stride,
-            height_stride,
-            width_stride,
+            height_stride * self.stride,
+            width_stride * self.stride,
             height_stride,
             width_stride,
         )
-        b,c,h,w = input.shape
-        F,_,hk, wk = self.weights.data.shape
-        hout = (h + 2 * self.padding - hk) // self.stride + 1
-        wout = (w + 2 * self.padding - wk) // self.stride + 1
-        shape = (b, c, hout, wout, hk, wk) # Reshape to (B, C, H_out, W_out, kernel_height, kernel_width)
-        if self.padding > 0:
-            input = input.pad(((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)), mode='constant')
 
-        strided_input = input.as_strided(shape,strides)
+        
+        strided_input = input.as_strided(shape, strides)
+
+        # Rearrange into 2D matrix: (B * hout * wout, C * hk * wk)
         col_matrix = strided_input.transpose(0, 2, 3, 1, 4, 5).reshape(b * hout * wout, c * hk * wk)
+
+        # Flatten the kernels: (F, C * hk * wk) → then transpose → (C * hk * wk, F)
         reshaped_kernel = self.weights.reshape(F, c * hk * wk).T
 
-        out = col_matrix @ reshaped_kernel  # Matrix multiplication
-        out_reshaped = out.reshape(b, hout, wout, F).transpose(0, 3, 1, 2)  # Reshape to (B, F, H_out, W_out)
+        # Matrix multiplication → (B * hout * wout, F)
+        out = col_matrix @ reshaped_kernel
+
+        # Reshape back to (B, F, hout, wout)
+        out_reshaped = out.reshape(b, hout, wout, F).transpose(0, 3, 1, 2)
+
+        # Add bias if enabled
         if self.bias_flag:
             bias_reshaped = self.bias.reshape(1, self.output_channels, 1, 1)
             out_reshaped = out_reshaped + bias_reshaped
 
-        
-
         return out_reshaped
+
 
 
 
@@ -342,26 +301,10 @@ class MaxPool2d(Module):
 class GAP(Module):
     def __init__(self):
         super().__init__()
-        self.input = None
-        self.output = None
-        self.input_normalized = None
-        self.output = None
 
     def __call__(self, input, **kwargs):
-        self.input = input
-        #calc mean across H and W for each channel and batch
-        output = np.mean(self.input.data, axis=(2, 3),keepdims=False)
-        self.output = Tensor(output, requires_grad=True)
-        self.output._grad_fn = self.backward
-        self.output.op_name = "GAP"
-        self.output.parents = [self.input]
-        return self.output
+        return input.mean(axis=(2, 3),keepdims=True)
     
-    def backward(self, grad):
-        #each channel gets one value as the gradient 
-        B, C, H, W = self.input.shape
-        input_grad = np.ones((B, C, H, W)) * grad[:, :, np.newaxis, np.newaxis] / (H * W)
-        self.input.assign_grad(input_grad)
 
 
 ##############################################################################################
@@ -373,6 +316,8 @@ class GAP(Module):
 #                                                                                            #
 #                                                                                            #
 ##############################################################################################
+
+
 
 
 class GeneralNorm(Layer):
@@ -387,28 +332,43 @@ class GeneralNorm(Layer):
         var = input.var(axis=self.axes, keepdims=True)
         x_norm = (input - mean) / (var + 1e-5).sqrt()
         return self.gamma * x_norm + self.beta
+    
+    def parameters(self):
+        return [self.gamma, self.beta]
+    
 
 class ConvBatchNorm2D(GeneralNorm):
     def __init__(self, channels):
         super().__init__(axes=(0, 2, 3), param_shape=(1, channels, 1, 1))
-        self.eps = Tensor(1e-5, requires_grad=False)  # Small constant for numerical stability
-        self.running_mean = Tensor(np.zeros((1, channels, 1, 1)), requires_grad=False)
-        self.running_variance = Tensor(np.ones((1, channels, 1, 1)), requires_grad=False)
-        self.betanorm = Tensor(0.9, requires_grad=False)  # Beta normalization factor
+        self.eps = Tensor(1e-5, requires_grad=False,name="eps")  # Small constant for numerical stability
+        self.running_mean = Tensor(np.zeros((1, channels, 1, 1)), requires_grad=False,name="running_mean")
+        self.running_variance = Tensor(np.ones((1, channels, 1, 1)), requires_grad=False,name="running_variance")
+        self.betanorm = Tensor(0.9, requires_grad=False,name="betanorm")  # Beta normalization factor
+        self.gamma = Tensor(np.ones((1, channels, 1, 1)), requires_grad=True,name="gamma")
+        self.beta = Tensor(np.zeros((1, channels, 1, 1)), requires_grad=True,name="beta")
+
     def __call__(self, input, **kwargs):
         mean = input.mean(axis=(0, 2, 3), keepdims=True)
         var = input.var(axis=(0, 2, 3), keepdims=True)
+        # print(f"mean shape: {mean.shape}, var shape: {var.shape}")
         self.running_mean = (self.running_mean * self.betanorm) + (mean * (1 - self.betanorm))
         self.running_variance = (self.running_variance * self.betanorm) + (var * (1 - self.betanorm))
-        if Config.TEST==False:
+        if TEST==False:
+            
             x_norm = (input - mean) / (var + 1e-5).sqrt()
         
         else:
-            x_norm = (input - self.running_mean) / (self.running_variance + 1e-5).sqrt()
+            x_centered = input - self.running_mean
+            scale = (self.running_variance + 1e-5).sqrt()
+            x_norm = x_centered / scale
 
         return self.gamma * x_norm + self.beta
     
+
     def parameters(self):
+        return [self.gamma, self.beta]
+
+    def trained_parameters(self):
         return [self.gamma, self.beta, self.running_mean, self.running_variance]
 
 
@@ -459,6 +419,9 @@ class GroupNorm(Layer):
 
         
         return self.gamma * x_norm + self.beta
+    
+    def parameters(self):
+        return [self.gamma, self.beta]
 
 class rmsnorm(Layer):
     def __init__(self, dim, eps=1e-6):
@@ -473,6 +436,9 @@ class rmsnorm(Layer):
         mean_square = (x ** 2).mean(axis=-1, keepdims=True)
         x_norm = x / np.sqrt(mean_square + self.eps)
         return self.gamma * x_norm
+    
+    def parameters(self):
+        return [self.gamma]
 
 
 
@@ -586,13 +552,13 @@ class MultiHeadAttention(Layer):
         # Output projection: (B, T, D)
         self.out_proj = Linear(dmodel, dmodel, initialize_type='random')
 
-    def __call__(self, x):
+    def __call__(self, x,q=None, k=None, v=None):
         b, t, _ = x.shape
         
+        if q is None and k is None and v is None:
+            qkv = self.qkv_proj(x)  # (B, T, 3D)
+            q, k, v = qkv.split(indices_or_sections=3, axis=2)  # Each is (B, T, D)
 
-
-        qkv = self.qkv_proj(x)  # (B, T, 3D)
-        q, k, v = qkv.split(indices_or_sections=3, axis=2)  # Each is (B, T, D)
         # print(f"q shape: {q.shape}, k shape: {k.shape}, v shape: {v.shape}")
 
         def reshape_heads(tensor):  # (B, T, D) -> (B, n_heads, T, d_head)
@@ -621,3 +587,43 @@ class MultiHeadAttention(Layer):
         return self.out_proj(attn)
 
         
+
+class Dropout(Layer):
+    def __init__(self, p=0.5):
+        super().__init__()
+        self.p = p
+
+    def __call__(self, x, **kwargs):
+        if TEST:
+            return x  # No dropout during evaluation
+        mask = Tensor(np.random.binomial(1, 1 - self.p, size=x.shape) / (1 - self.p))
+        return x * mask
+
+
+
+
+class TransformerEncoderLayer(Layer):
+    def __init__(self, dmodel, n_heads, dim_feedforward=2048, dropout=0.1,masked=False):
+        super().__init__()
+        self.self_attn = MultiHeadAttention(dmodel, n_heads, masked=masked)
+        self.linear1 = Linear(dmodel, dim_feedforward, initialize_type='random')
+        self.linear2 = Linear(dim_feedforward, dmodel, initialize_type='random')
+        self.norm1 = LayerNorm3D(dmodel)
+        self.norm2 = LayerNorm3D(dmodel)
+        self.dropout1 = Dropout(dropout)
+        self.dropout2 = Dropout(dropout)
+        
+
+    def __call__(self, x): #x is of shape (B, T, D)
+        attn_output = self.self_attn(x)
+        x = x + self.dropout1(attn_output)  # Residual connection
+        x = self.norm1(x)
+
+        ff_output = self.linear2(self.activation(self.linear1(x)))
+        x = x + self.dropout2(ff_output)  # Residual connection
+        x = self.norm2(x)
+
+        return x
+    
+
+

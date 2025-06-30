@@ -1,4 +1,4 @@
-from core.nn import Conv2d, MaxPool2d, Linear, Relu ,GAP ,batchnorm2d , Flatten
+from core.nn import Conv2d, MaxPool2d, Linear, Relu ,GAP ,ConvBatchNorm2D , Flatten
 from core.Models import Model
 
 
@@ -6,43 +6,43 @@ class Features(Model):
     def __init__(self):
         super().__init__()
         # Block 1: 2 conv layers with 64 filters
-        self.conv1_1 = Conv2d(input_channels=3, output_channels=64, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv1_1 = Conv2d(input_channels=3, output_channels=64, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu1_1 = Relu()
-        self.conv1_2 = Conv2d(input_channels=64, output_channels=64, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv1_2 = Conv2d(input_channels=64, output_channels=64, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu1_2 = Relu()
         self.maxpool1 = MaxPool2d(kernel_size=2, stride=2)
 
         # Block 2: 2 conv layers with 128 filters
-        self.conv2_1 = Conv2d(input_channels=64, output_channels=128, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv2_1 = Conv2d(input_channels=64, output_channels=128, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu2_1 = Relu()
-        self.conv2_2 = Conv2d(input_channels=128, output_channels=128, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv2_2 = Conv2d(input_channels=128, output_channels=128, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu2_2 = Relu()
         self.maxpool2 = MaxPool2d(kernel_size=2, stride=2)
 
         # Block 3: 3 conv layers with 256 filters
-        self.conv3_1 = Conv2d(input_channels=128, output_channels=256, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv3_1 = Conv2d(input_channels=128, output_channels=256, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu3_1 = Relu()
-        self.conv3_2 = Conv2d(input_channels=256, output_channels=256, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv3_2 = Conv2d(input_channels=256, output_channels=256, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu3_2 = Relu()
-        self.conv3_3 = Conv2d(input_channels=256, output_channels=256, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv3_3 = Conv2d(input_channels=256, output_channels=256, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu3_3 = Relu()
         self.maxpool3 = MaxPool2d(kernel_size=2, stride=2)
 
         # Block 4: 3 conv layers with 512 filters
-        self.conv4_1 = Conv2d(input_channels=256, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv4_1 = Conv2d(input_channels=256, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu4_1 = Relu()
-        self.conv4_2 = Conv2d(input_channels=512, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv4_2 = Conv2d(input_channels=512, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu4_2 = Relu()
-        self.conv4_3 = Conv2d(input_channels=512, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv4_3 = Conv2d(input_channels=512, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu4_3 = Relu()
         self.maxpool4 = MaxPool2d(kernel_size=2, stride=2)
 
         # Block 5: 3 conv layers with 512 filters
-        self.conv5_1 = Conv2d(input_channels=512, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv5_1 = Conv2d(input_channels=512, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu5_1 = Relu()
-        self.conv5_2 = Conv2d(input_channels=512, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv5_2 = Conv2d(input_channels=512, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu5_2 = Relu()
-        self.conv5_3 = Conv2d(input_channels=512, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='zero')
+        self.conv5_3 = Conv2d(input_channels=512, output_channels=512, kernel_size=3, stride=1, padding=1, initialize_type='xavier')
         self.relu5_3 = Relu()
         self.maxpool5 = MaxPool2d(kernel_size=2, stride=2)
 
@@ -89,11 +89,11 @@ class Classifier(Model):
     def __init__(self, num_classes=1000):
         super().__init__()
         # Assuming input to classifier is 512 * 7 * 7 (after conv layers with input size 224x224)
-        self.fc1 = Linear(512 * 7 * 7, 4096, initialize_type='zero')
+        self.fc1 = Linear(512 * 7 * 7, 4096, initialize_type='xavier')
         self.relu1 = Relu()
-        self.fc2 = Linear(4096, 4096, initialize_type='zero')
+        self.fc2 = Linear(4096, 4096, initialize_type='xavier')
         self.relu2 = Relu()
-        self.fc3 = Linear(4096, num_classes, initialize_type='zero')
+        self.fc3 = Linear(4096, num_classes, initialize_type='xavier')
 
     def forward(self, x):
         # x = x.view(x.shape[0], -1)  # Flatten [B, 512, 7, 7] to [B, 512*7*7]

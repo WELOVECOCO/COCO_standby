@@ -1,6 +1,6 @@
 
 from core.nn import Conv2d
-from core.tensor import Tensor  
+from core.new_tensor import Tensor  
 import numpy as np
 import torch
 import torch.nn.functional as F

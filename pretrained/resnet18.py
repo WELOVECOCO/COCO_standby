@@ -1,4 +1,4 @@
-from core.nn import Conv2d, MaxPool2d, Linear, Relu, batchnorm2d, GAP , Flatten
+from core.nn import Conv2d, MaxPool2d, Linear, Relu, ConvBatchNorm2D, GAP , Flatten
 from core.Models import Model
 import numpy as np
 # class BasicBlock(Model):
@@ -16,7 +16,7 @@ import numpy as np
 #             initialize_type='zero',
 #             bias=False
 #         )
-#         self.bn1 = batchnorm2d(out_channels)
+#         self.bn1 = ConvBatchNorm2D(out_channels)
 #         self.relu = Relu()
         
 #         # Second conv layer
@@ -30,7 +30,7 @@ import numpy as np
 #             bias=False
             
 #         )
-#         self.bn2 = batchnorm2d(out_channels)
+#         self.bn2 = ConvBatchNorm2D(out_channels)
         
 #         self.downsample = downsample
         
@@ -66,7 +66,7 @@ class BasicBlock(Model):
             initialize_type='zero',
             bias=False
         )
-        self.bn1 = batchnorm2d(out_channels)
+        self.bn1 = ConvBatchNorm2D(out_channels)
         self.relu = Relu()
         
         # Second conv layer
@@ -80,7 +80,7 @@ class BasicBlock(Model):
             bias=False
             
         )
-        self.bn2 = batchnorm2d(out_channels)
+        self.bn2 = ConvBatchNorm2D(out_channels)
         
         self.downsample = downsample
         self.stride = stride
@@ -135,7 +135,7 @@ class DownsampleBlock(Model):
             initialize_type='zero',
             bias=False
         )
-        self.bn = batchnorm2d(out_channels)
+        self.bn = ConvBatchNorm2D(out_channels)
     
     def forward(self, x):
         out = self.conv(x)
@@ -155,7 +155,7 @@ class Backbone(Model):
             initialize_type='zero',
             bias=False
         )
-        self.bn1 = batchnorm2d(64)
+        self.bn1 = ConvBatchNorm2D(64)
         self.relu = Relu()
         self.maxpool = MaxPool2d(kernel_size=3, stride=2, padding=1)
         
